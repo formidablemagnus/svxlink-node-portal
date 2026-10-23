@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 import uuid
+from collections import deque
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,6 +46,59 @@ STATIC_ASSETS = {
     "dtmf.js": JS,
 }
 VALID_RADIO_MODES = {"tx", "rx", "idle", "unknown"}
+MAX_RADIO_EVENTS_PER_REQUEST = 100
+MAX_RADIO_VIEWERS_PER_NODE = 20
+RADIO_STREAM_KEEPALIVE_SECONDS = 15
+
+
+class RadioHub:
+    """In-memory fan-out of live radio events from agents to browser viewers."""
+
+    def __init__(self):
+        self.condition = threading.Condition()
+        self.nodes = {}
+
+    def _node(self, node_id):
+        return self.nodes.setdefault(
+            node_id, {"seq": 0, "events": deque(maxlen=500), "viewers": 0, "latest": None}
+        )
+
+    def add_events(self, node_id, events):
+        with self.condition:
+            node = self._node(node_id)
+            for event in events:
+                node["seq"] += 1
+                node["events"].append((node["seq"], event))
+                node["latest"] = event
+            self.condition.notify_all()
+
+    def watched(self, node_id):
+        with self.condition:
+            node = self.nodes.get(node_id)
+            return bool(node and node["viewers"] > 0)
+
+    def subscribe(self, node_id):
+        with self.condition:
+            node = self._node(node_id)
+            if node["viewers"] >= MAX_RADIO_VIEWERS_PER_NODE:
+                return None
+            node["viewers"] += 1
+            return node["seq"], node["latest"]
+
+    def unsubscribe(self, node_id):
+        with self.condition:
+            node = self._node(node_id)
+            node["viewers"] = max(0, node["viewers"] - 1)
+
+    def wait(self, node_id, after, timeout):
+        with self.condition:
+            node = self._node(node_id)
+            if node["seq"] <= after:
+                self.condition.wait(timeout)
+            return node["seq"], [(seq, event) for seq, event in node["events"] if seq > after]
+
+
+RADIO_HUB = RadioHub()
 COMMAND_CLEANUP_INTERVAL_SECONDS = 60
 _command_cleanup_lock = threading.Lock()
 _last_command_cleanup = {}
@@ -172,17 +226,7 @@ def validate_status(payload):
         raise ValueError("'logic' måste vara text på högst 128 tecken.")
     if not isinstance(callsign, str) or len(callsign) > 64:
         raise ValueError("'callsign' måste vara text på högst 64 tecken.")
-    radio = payload.get("radio", {})
-    if not isinstance(radio, dict):
-        raise ValueError("'radio' måste vara ett JSON-objekt.")
-    mode = radio.get("mode", "unknown")
-    if not isinstance(mode, str) or mode not in VALID_RADIO_MODES:
-        raise ValueError("'radio.mode' har ett ogiltigt värde.")
-    signal_level = radio.get("signal_level")
-    if signal_level is not None and (
-        type(signal_level) is not int or not 0 <= signal_level <= 100
-    ):
-        raise ValueError("'radio.signal_level' måste vara ett heltal mellan 0 och 100.")
+    radio = validate_radio(payload.get("radio", {}))
     logs = payload.get("logs", [])
     if not isinstance(logs, list) or len(logs) > MAX_LOG_LINES:
         raise ValueError(f"'logs' måste vara en lista med högst {MAX_LOG_LINES} loggrader.")
@@ -201,9 +245,124 @@ def validate_status(payload):
         "current_tg": str(current_tg) if current_tg is not None else None,
         "logic": logic,
         "callsign": callsign,
-        "radio": {"mode": mode, "signal_level": signal_level},
+        "radio": radio,
         "logs": logs,
+        **validate_status_details(payload),
     }
+
+
+def optional_text(payload, key, limit):
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or len(value) > limit:
+        raise ValueError(f"'{key}' måste vara text på högst {limit} tecken.")
+    return value
+
+
+def validate_status_details(payload):
+    monitor_tgs = payload.get("monitor_tgs", [])
+    if (
+        not isinstance(monitor_tgs, list)
+        or len(monitor_tgs) > 64
+        or any(not isinstance(tg, str) or len(tg) > 16 for tg in monitor_tgs)
+    ):
+        raise ValueError("'monitor_tgs' måste vara en lista med talgrupper.")
+    pty_checks = payload.get("pty_checks", [])
+    if not isinstance(pty_checks, list) or len(pty_checks) > 10:
+        raise ValueError("'pty_checks' måste vara en lista med högst 10 poster.")
+    clean_checks = []
+    for check in pty_checks:
+        if not isinstance(check, dict):
+            raise ValueError("Varje PTY-kontroll måste vara ett JSON-objekt.")
+        clean_checks.append({
+            key: optional_text(check, key, 256) for key in ("variable", "logic", "path", "reason")
+        })
+    counters = {}
+    for key in ("errors", "warnings", "events"):
+        value = payload.get(key, 0)
+        if type(value) is not int or not 0 <= value <= 1_000_000:
+            raise ValueError(f"'{key}' måste vara ett heltal.")
+        counters[key] = value
+    return {
+        "tg_event": optional_text(payload, "tg_event", 128) or "",
+        "tg_time": optional_text(payload, "tg_time", 32) or "",
+        "monitor_tgs": monitor_tgs,
+        "monitor_tgs_error": optional_text(payload, "monitor_tgs_error", 256),
+        "pty_checks": clean_checks,
+        **counters,
+    }
+
+
+def validate_radio(radio):
+    if not isinstance(radio, dict):
+        raise ValueError("'radio' måste vara ett JSON-objekt.")
+    mode = radio.get("mode", "unknown")
+    if not isinstance(mode, str) or mode not in VALID_RADIO_MODES:
+        raise ValueError("'radio.mode' har ett ogiltigt värde.")
+    signal_level = radio.get("signal_level")
+    if signal_level is not None and (
+        type(signal_level) is not int or not 0 <= signal_level <= 100
+    ):
+        raise ValueError("'radio.signal_level' måste vara ett heltal mellan 0 och 100.")
+    receivers = radio.get("receivers", [])
+    transmitters = radio.get("transmitters", [])
+    if (
+        not isinstance(receivers, list) or len(receivers) > 32
+        or not isinstance(transmitters, list) or len(transmitters) > 32
+    ):
+        raise ValueError("'radio' har för många mottagare eller sändare.")
+    clean_receivers = []
+    for receiver in receivers:
+        if (
+            not isinstance(receiver, dict)
+            or not isinstance(receiver.get("name"), str)
+            or len(receiver["name"]) > 64
+            or type(receiver.get("receiving")) is not bool
+            or type(receiver.get("siglev")) is not int
+            or not 0 <= receiver["siglev"] <= 100
+        ):
+            raise ValueError("Ogiltig mottagarstatus.")
+        clean_receivers.append({
+            "name": receiver["name"],
+            "receiving": receiver["receiving"],
+            "siglev": receiver["siglev"],
+        })
+    clean_transmitters = []
+    for transmitter in transmitters:
+        if (
+            not isinstance(transmitter, dict)
+            or not isinstance(transmitter.get("name"), str)
+            or len(transmitter["name"]) > 64
+            or type(transmitter.get("transmit")) is not bool
+        ):
+            raise ValueError("Ogiltig sändarstatus.")
+        clean_transmitters.append({
+            "name": transmitter["name"],
+            "transmit": transmitter["transmit"],
+        })
+    return {
+        "mode": mode,
+        "signal_level": signal_level,
+        "receivers": clean_receivers,
+        "transmitters": clean_transmitters,
+        "error": optional_text(radio, "error", 256),
+    }
+
+
+def validate_radio_events(payload):
+    events = payload.get("events") if isinstance(payload, dict) else None
+    if not isinstance(events, list) or not 1 <= len(events) <= MAX_RADIO_EVENTS_PER_REQUEST:
+        raise ValueError("'events' måste vara en lista med 1–100 radiohändelser.")
+    clean = []
+    for event in events:
+        if not isinstance(event, dict):
+            raise ValueError("Varje radiohändelse måste vara ett JSON-objekt.")
+        timestamp = event.get("t")
+        if type(timestamp) is not int or timestamp < 0:
+            raise ValueError("Radiohändelsen saknar giltig tidsstämpel.")
+        clean.append({"t": timestamp, **validate_radio(event)})
+    return clean
 
 
 def node_rows():
@@ -607,7 +766,10 @@ class PortalHandler(BaseHTTPRequestHandler):
             if node_id is None:
                 self.send_json(401, {"error": "Ogiltig nodautentisering."})
                 return
-            self.send_json(200, {"commands": claim_agent_commands(node_id)})
+            self.send_json(200, {
+                "commands": claim_agent_commands(node_id),
+                "watch": RADIO_HUB.watched(node_id),
+            })
             return
         if not self.require_admin():
             return
@@ -662,6 +824,13 @@ class PortalHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"buttons": list_dtmf_buttons()})
         elif path == "/api/nodes":
             self.send_json(200, {"nodes": node_rows()})
+        elif path.startswith("/api/nodes/") and path.endswith("/radio-events"):
+            node_id = path[len("/api/nodes/"):-len("/radio-events")]
+            node = node_by_id(node_id) if node_id and "/" not in node_id else None
+            if node is None:
+                self.send_json(404, {"error": "Noden hittades inte."})
+            else:
+                self.stream_radio_events(node)
         elif path.startswith("/api/nodes/"):
             node_id = path[len("/api/nodes/"):]
             node = node_by_id(node_id) if node_id and "/" not in node_id else None
@@ -691,6 +860,48 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.send_json(200, result)
         else:
             self.send_json(404, {"error": "Sidan hittades inte."})
+
+    def stream_radio_events(self, node):
+        node_id = node["id"]
+        subscription = RADIO_HUB.subscribe(node_id)
+        if subscription is None:
+            self.send_json(429, {"error": "För många samtidiga radioströmmar för noden."})
+            return
+        sequence, latest = subscription
+        if latest is None and node["status"]:
+            latest = {"t": int(time.time() * 1000), **node["status"].get("radio", {})}
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+        def send(event_name, data):
+            payload = json.dumps(data, ensure_ascii=False)
+            self.wfile.write(f"event: {event_name}\ndata: {payload}\n\n".encode("utf-8"))
+            self.wfile.flush()
+
+        try:
+            self.wfile.write(b"retry: 2000\n\n")
+            if latest is not None:
+                send("radio", latest)
+            while True:
+                new_sequence, events = RADIO_HUB.wait(
+                    node_id, sequence, RADIO_STREAM_KEEPALIVE_SECONDS
+                )
+                if events:
+                    for _, event in events:
+                        send("radio", event)
+                    sequence = new_sequence
+                else:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionError, OSError):
+            pass
+        finally:
+            RADIO_HUB.unsubscribe(node_id)
 
     def do_POST(self):
         path = urlparse(self.path).path
@@ -875,6 +1086,20 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.send_json(200, {"ok": True})
             return
 
+        if path == "/api/v1/agent/radio":
+            node_id = self.authenticated_agent_id()
+            if node_id is None:
+                self.send_json(401, {"error": "Ogiltig nodautentisering."})
+                return
+            try:
+                events = validate_radio_events(self.read_json_body(MAX_REQUEST_BYTES))
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            RADIO_HUB.add_events(node_id, events)
+            self.send_json(200, {"ok": True, "watch": RADIO_HUB.watched(node_id)})
+            return
+
         if path != "/api/v1/agent/status":
             self.send_json(404, {"error": "Endpoint hittades inte."})
             return
@@ -894,7 +1119,11 @@ class PortalHandler(BaseHTTPRequestHandler):
                 "UPDATE nodes SET status_json = ?, last_seen = ? WHERE id = ?",
                 (json.dumps(status, ensure_ascii=False), now, node_id),
             )
-        self.send_json(200, {"ok": True, "received_at": now})
+        self.send_json(200, {
+            "ok": True,
+            "received_at": now,
+            "watch": RADIO_HUB.watched(node_id),
+        })
 
 
 def serve():

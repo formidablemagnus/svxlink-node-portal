@@ -22,21 +22,55 @@ function updateServiceControls() {
   serviceStopButton.disabled = !nodeOnline || serviceCommandRunning || waitingForStatus || serviceActive !== true;
 }
 
+function renderRadio(radio) {
+  const mode = radioNames[radio.mode] || 'Okänd';
+  const signal = Number.isInteger(radio.signal_level) ? `${radio.signal_level}%` : 'Okänd';
+  setText('radio', mode);
+  setText('radio-mode', mode);
+  setText('signal-level', signal);
+  const devices = document.getElementById('radio-devices');
+  devices.replaceChildren();
+  const rows = [
+    ...(radio.receivers || []).map((r) => `RX ${r.name}: ${r.receiving ? `öppen, ${r.siglev}%` : `stängd, ${r.siglev}%`}`),
+    ...(radio.transmitters || []).map((t) => `TX ${t.name}: ${t.transmit ? 'sänder' : 'vila'}`)
+  ];
+  for (const text of rows.length ? rows : ['Inga mottagare eller sändare rapporterade.']) {
+    const item = document.createElement('li');
+    item.textContent = text;
+    if (!rows.length) item.className = 'muted';
+    devices.append(item);
+  }
+  if (radio.error) setText('error', radio.error);
+}
+
+let liveRadioAt = 0;
+let radioSource = null;
+
+function startRadioStream() {
+  if (radioSource) radioSource.close();
+  radioSource = new EventSource(`/api/nodes/${encodeURIComponent(nodeId)}/radio-events`);
+  radioSource.addEventListener('radio', (event) => {
+    liveRadioAt = Date.now();
+    setText('live-state', 'Live');
+    renderRadio(JSON.parse(event.data));
+  });
+  radioSource.onerror = () => setText('live-state', 'Återansluter…');
+}
+
 function renderNode(node) {
   const status = node.status || {};
   const radio = status.radio || {};
-  const mode = radioNames[radio.mode] || 'Okänd';
-  const signal = Number.isInteger(radio.signal_level) ? `${radio.signal_level}%` : 'Okänd';
   const lastSeen = node.last_seen ? new Date(node.last_seen).toLocaleString('sv-SE') : 'Aldrig';
   setText('node-name', node.name);
-  setText('node-callsign', status.callsign || 'SvxLink-status från nodens webpanel');
+  setText('node-callsign', status.callsign || 'Lokal SvxLink-status från nodagenten');
   setText('online', node.online ? 'Online' : 'Offline');
   setText('service', status.service_status || 'Okänd');
-  setText('radio', mode);
+  if (Date.now() - liveRadioAt > 5000) renderRadio(radio);
   setText('talkgroup', status.current_tg ? `TG ${status.current_tg}` : 'Okänd');
-  setText('radio-mode', mode);
-  setText('signal-level', signal);
   setText('current-tg', status.current_tg ? `TG ${status.current_tg}` : 'Okänd');
+  setText('tg-event', status.tg_event || 'Okänd');
+  setText('monitor-tgs', Array.isArray(status.monitor_tgs) && status.monitor_tgs.length ? status.monitor_tgs.join(', ') : 'Inga');
+  setText('pty-checks', (status.pty_checks || []).map((check) => check.reason).filter(Boolean).join(' '));
   setText('logic', status.logic || 'Okänd');
   setText('callsign', status.callsign || 'Okänd');
   setText('service-status', status.service_status || 'Okänd');
@@ -213,4 +247,5 @@ async function refresh() {
 
 loadPresets();
 refresh();
-setInterval(refresh, 5000);
+startRadioStream();
+setInterval(refresh, 3000);

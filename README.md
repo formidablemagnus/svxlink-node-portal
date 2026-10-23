@@ -8,8 +8,9 @@ DTMF sequences to individual or selected online nodes.
 ## Components
 
 - `portal/` — central HTTP service, SQLite node registry and dashboard.
-- `agent/` — lightweight agent that reads the local webpanel status and reports
-  a validated status snapshot to the portal over HTTP or HTTPS.
+- `agent/` — lightweight agent that collects all local node information itself
+  (systemd service state, `svxlink.conf`, the SvxLink log and `STATE_PTY`) and
+  reports it to the portal over HTTP or HTTPS. No webpanel is needed.
 - `web/` — self-hosted dashboard assets; no external frontend dependencies.
 - `install.sh` and `systemd/` — role-based installer and service units.
 
@@ -22,7 +23,7 @@ bearer token; only its SHA-256 hash is stored in the portal database.
 - Linux with systemd for the installer and services.
 - Python 3.10 or later on the portal and nodes.
 - Git on the portal server and nodes.
-- The existing SvxLink Webpanel installed on each node.
+- SvxLink installed on each node (the SvxLink Webpanel is not required).
 - HTTPS is recommended for the portal endpoint. HTTP is also supported for
   trusted private networks.
 
@@ -91,8 +92,9 @@ sudo bash ./install.sh agent
 ```
 
 The installer prompts for the portal HTTP or HTTPS URL, node ID and one-time
-token from `provision-node`, and the webpanel credentials. SvxLink and the
-webpanel must already be installed; the agent runs as `svxlink`. The agent
+token from `provision-node`, and the SvxLink config and log paths. SvxLink
+must already be installed; the agent runs as `svxlink` and needs read access to
+the log file and the `STATE_PTY` configured in `svxlink.conf`. The agent
 initiates all connections, so no inbound firewall rule is needed.
 
 HTTPS is strongly recommended. HTTP sends the bearer token and status reports
@@ -201,9 +203,20 @@ are considered online for 30 seconds.
 `GET /api/nodes`, `GET /api/nodes/<node-id>`, the dashboard and node detail
 pages require portal Basic authentication. Select a node from the dashboard
 to view its latest service, radio, signal, talkgroup, logic, callsign,
-last-seen information and up to 50 recent log lines. The agent reads log lines
-from the existing webpanel status API and reports them with each status update;
-the portal stores only the latest report, not a long-term log archive.
+last-seen information and up to 50 recent log lines. The agent tails the log,
+reads `STATE_PTY` and polls the service continuously; it sends a status report
+immediately on changes (and at least every `AGENT_INTERVAL_SECONDS`, default 5).
+The portal stores only the latest report, not a long-term log archive.
+
+### Live radio stream
+
+While a browser has a node detail page open (`GET /api/nodes/<id>/radio-events`,
+Server-Sent Events, Basic auth), the portal tells the agent to stream radio
+events (`POST /api/v1/agent/radio`: mode, signal level, per-receiver squelch
+and signal, transmitter state). The agent learns this from the `watch` flag in
+its command-poll (default every second, `AGENT_COMMAND_POLL_SECONDS`) and
+status responses, and stops streaming when nobody is watching. Radio events
+are kept only in memory.
 
 ## Tests
 

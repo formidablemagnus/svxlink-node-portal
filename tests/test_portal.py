@@ -376,6 +376,82 @@ class PortalStatusTests(unittest.TestCase):
                 thread.join(timeout=2)
 
 
+class PortalRadioStreamTests(unittest.TestCase):
+    def test_agent_radio_events_reach_sse_viewer_and_enable_watch(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {
+                "PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3"),
+                "PORTAL_ADMIN_USER": "admin",
+                "PORTAL_ADMIN_PASSWORD": "this-is-a-long-test-password",
+            },
+        ):
+            node = provision_node("Radio node")
+            server = ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://127.0.0.1:{server.server_port}"
+                credentials = base64.b64encode(b"admin:this-is-a-long-test-password").decode()
+                agent_headers = {
+                    "Authorization": f"Bearer {node['token']}",
+                    "Content-Type": "application/json",
+                }
+
+                def agent_get_commands():
+                    with urlopen(
+                        Request(f"{base_url}/api/v1/agent/commands", headers=agent_headers),
+                        timeout=2,
+                    ) as response:
+                        return json.loads(response.read())
+
+                def agent_post_radio(events):
+                    request = Request(
+                        f"{base_url}/api/v1/agent/radio",
+                        data=json.dumps({"events": events}).encode("utf-8"),
+                        headers=agent_headers,
+                    )
+                    with urlopen(request, timeout=2) as response:
+                        return json.loads(response.read())
+
+                self.assertFalse(agent_get_commands()["watch"])
+                stream = urlopen(
+                    Request(
+                        f"{base_url}/api/nodes/{node['node_id']}/radio-events",
+                        headers={"Authorization": f"Basic {credentials}"},
+                    ),
+                    timeout=5,
+                )
+                try:
+                    self.assertTrue(agent_get_commands()["watch"])
+                    event = {
+                        "t": 1700000000000,
+                        "mode": "rx",
+                        "signal_level": 55,
+                        "receivers": [{"name": "Rx1", "receiving": True, "siglev": 55}],
+                        "transmitters": [],
+                    }
+                    self.assertTrue(agent_post_radio([event])["watch"])
+                    received = None
+                    while received is None:
+                        line = stream.readline().decode("utf-8")
+                        self.assertNotEqual(line, "")
+                        if line.startswith("data: "):
+                            received = json.loads(line[6:])
+                    self.assertEqual(received["mode"], "rx")
+                    self.assertEqual(received["receivers"][0]["siglev"], 55)
+                finally:
+                    stream.close()
+
+                with self.assertRaises(HTTPError) as invalid:
+                    agent_post_radio([{"t": 1, "mode": "bogus"}])
+                self.assertEqual(invalid.exception.code, 400)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+
 class PortalServiceCommandTests(unittest.TestCase):
     def test_admin_service_request_is_queued_for_agent(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(

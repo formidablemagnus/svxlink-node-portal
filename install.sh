@@ -173,7 +173,7 @@ create_agent_environment() {
   fi
 
   require_tty
-  local portal_url node_id token panel_url panel_user panel_password config_path interval
+  local portal_url node_id token config_path log_path interval
   prompt_value "Portalens HTTP- eller HTTPS-adress, exempel https://portal.example.net"
   portal_url="$REPLY"
   if ! python3 -c 'import sys; from urllib.parse import urlparse; u=urlparse(sys.argv[1]); sys.exit(0 if u.scheme in ("http", "https") and u.netloc and not u.username and not u.password and not u.query and not u.fragment else 1)' "$portal_url"; then
@@ -189,23 +189,18 @@ create_agent_environment() {
     say_error "Nodtoken måste innehålla minst 32 tecken."
     exit 1
   fi
-  prompt_value "Webbpanelens statusadress" "http://127.0.0.1:8090/api/status"
-  panel_url="$REPLY"
-  prompt_value "Webbpanelens användarnamn"
-  panel_user="$REPLY"
-  prompt_secret "Webbpanelens lösenord"
-  panel_password="$REPLY"
-  unset REPLY
   prompt_value "SvxLinks konfigurationsfil" "/etc/svxlink/svxlink.conf"
   config_path="$REPLY"
-  prompt_value "Rapporteringsintervall i sekunder" "5"
+  prompt_value "SvxLinks loggfil" "/var/log/svxlink"
+  log_path="$REPLY"
+  prompt_value "Rapporteringsintervall i sekunder (ändringar skickas direkt)" "5"
   interval="$REPLY"
-  if [[ ! "$interval" =~ ^[0-9]+$ ]] || (( interval < 2 )); then
-    say_error "Rapporteringsintervallet måste vara ett heltal på minst 2 sekunder."
+  if [[ ! "$interval" =~ ^[0-9]+$ ]] || (( interval < 1 )); then
+    say_error "Rapporteringsintervallet måste vara ett heltal på minst 1 sekund."
     exit 1
   fi
-  if [[ -z "$node_id" || -z "$panel_user" || -z "$panel_password" || -z "$config_path" ]]; then
-    say_error "Nod-ID, webbpanelens inloggning och konfigurationsfil måste anges."
+  if [[ -z "$node_id" || -z "$config_path" || -z "$log_path" ]]; then
+    say_error "Nod-ID, konfigurationsfil och loggfil måste anges."
     exit 1
   fi
 
@@ -213,12 +208,10 @@ create_agent_environment() {
     AGENT_PORTAL_URL "$portal_url" \
     AGENT_NODE_ID "$node_id" \
     AGENT_TOKEN "$token" \
-    AGENT_PANEL_URL "$panel_url" \
     AGENT_INTERVAL_SECONDS "$interval" \
-    SVXLINK_WEB_USER "$panel_user" \
-    SVXLINK_WEB_PASSWORD "$panel_password" \
-    SVXLINK_CONFIG "$config_path"
-  unset token panel_password REPLY
+    SVXLINK_CONFIG "$config_path" \
+    SVXLINK_LOGFILE "$log_path"
+  unset token REPLY
   printf 'Agentinställningar sparade i %s (root:root, 0600).\n' "$AGENT_ENV"
 }
 
@@ -271,7 +264,7 @@ if [[ ! -f "$SCRIPT_DIR/portal/server.py" || ! -f "$SCRIPT_DIR/agent/agent.py" |
   exit 1
 fi
 if [[ "$ROLE" == agent || "$ROLE" == both ]] && ! id svxlink >/dev/null 2>&1; then
-  say_error "Användaren 'svxlink' saknas. Installera SvxLink och webpanelen först."
+  say_error "Användaren 'svxlink' saknas. Installera SvxLink först."
   exit 1
 fi
 

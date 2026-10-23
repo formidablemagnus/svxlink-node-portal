@@ -1,7 +1,7 @@
 [Unit]
 Description=SvxLink Node Portal Agent
-After=network-online.target svxlink.service svxlink-webpanel.service
-Wants=network-online.target svxlink-webpanel.service
+After=network-online.target svxlink.service
+Wants=network-online.target
 
 [Service]
 Type=simple

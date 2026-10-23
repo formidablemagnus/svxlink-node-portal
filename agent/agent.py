@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """Collect local SvxLink status and report it to the central portal."""
-import base64
 import json
 import logging
 import os
 import re
 import stat
 import subprocess
+import threading
 import time
-from pathlib import Path
+from collections import deque
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from agent.collector import Collector, read_config_sections
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-MAX_LOG_LINES = 50
-MAX_LOG_LINE_BYTES = 512
+NETWORK_ERRORS = (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError)
+RADIO_BATCH_SIZE = 50
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 CONFIG_DOCUMENTS = {"svxlink.conf", "node_info.json"}
 CONFIG_HELPER = "/usr/local/libexec/svxlink-node-portal-config"
@@ -43,25 +45,6 @@ def validate_portal_url(value):
     return value.rstrip("/")
 
 
-def read_config_sections(config_path):
-    sections = {}
-    current_section = None
-    with open(config_path, "r", encoding="utf-8") as config_file:
-        for raw_line in config_file:
-            line = raw_line.strip()
-            if not line or line.startswith(("#", ";")):
-                continue
-            if line.startswith("[") and "]" in line:
-                current_section = line[1:line.index("]")].strip()
-                sections.setdefault(current_section, {})
-            elif current_section and "=" in line:
-                key, value = line.split("=", 1)
-                sections[current_section][key.strip()] = (
-                    value.split("#", 1)[0].split(";", 1)[0].strip()
-                )
-    return sections
-
-
 def read_logic_info(config_path):
     try:
         sections = read_config_sections(config_path)
@@ -84,46 +67,12 @@ def read_logic_info(config_path):
         return {"logic": "", "callsign": ""}
 
 
-def make_status(panel_status, config_path):
-    if not isinstance(panel_status, dict):
-        raise ValueError("Webpanelen returnerade inte ett JSON-objekt.")
-    if type(panel_status.get("active")) is not bool:
-        raise ValueError("Webpanelen returnerade ingen giltig tjänstestatus.")
-    service_status = panel_status.get("service_status")
-    if not isinstance(service_status, str):
-        raise ValueError("Webpanelen returnerade ingen giltig tjänstebeskrivning.")
-    radio = panel_status.get("radio")
-    if not isinstance(radio, dict):
-        radio = {}
-    mode = radio.get("mode", "unknown")
-    if mode not in ("tx", "rx", "idle", "unknown"):
-        mode = "unknown"
-    signal_level = radio.get("signal_level")
-    if type(signal_level) is not int or not 0 <= signal_level <= 100:
-        signal_level = None
-    current_tg = panel_status.get("current_tg")
-    if current_tg is not None and not isinstance(current_tg, (str, int)):
-        current_tg = None
-    logs = panel_status.get("lines", [])
-    if not isinstance(logs, list) or any(not isinstance(line, str) for line in logs):
-        raise ValueError("Webpanelen returnerade ogiltiga loggrader.")
-    clean_logs = []
-    for line in logs[-MAX_LOG_LINES:]:
-        clean_line = "".join(
-            char for char in line if char in "\t" or ord(char) >= 32
-        )
-        encoded_line = clean_line.encode("utf-8", errors="replace")[:MAX_LOG_LINE_BYTES]
-        clean_logs.append(encoded_line.decode("utf-8", errors="ignore"))
-    logic_info = read_logic_info(config_path)
-    return {
-        "active": panel_status["active"],
-        "service_status": service_status[:64],
-        "current_tg": str(current_tg) if current_tg is not None else None,
-        "logic": logic_info["logic"],
-        "callsign": logic_info["callsign"],
-        "radio": {"mode": mode, "signal_level": signal_level},
-        "logs": clean_logs,
-    }
+def reject_json_constant(value):
+    raise ValueError(f"Ogiltigt JSON-konstantvärde: {value}.")
+
+
+def reject_json_constant(value):
+    raise ValueError(f"Ogiltigt JSON-konstantvärde: {value}.")
 
 
 def request_json(url, payload=None, headers=None, timeout=10):
@@ -324,8 +273,9 @@ def process_agent_commands(commands_url, results_url, headers, config_path):
             raise ValueError("Portalen returnerade en ogiltig kommandolista.")
     except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
         logging.warning("Kunde inte hämta åtgärder från portalen: %s", exc)
-        return
+        return None
 
+    watch = response.get("watch") is True
     for command in commands:
         command_id = command.get("id") if isinstance(command, dict) else None
         if not isinstance(command_id, str):
@@ -354,24 +304,107 @@ def process_agent_commands(commands_url, results_url, headers, config_path):
                 )
         except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
             logging.warning("Kunde inte skicka resultatet av åtgärden: %s", exc)
+    return watch
 
 
-def report_status(panel_url, status_url, node_id, config_path, panel_headers, portal_headers):
-    try:
-        local_status = request_json(panel_url, headers=panel_headers)
-        status = make_status(local_status, config_path)
-    except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
-        logging.warning("Kunde inte hämta status från den lokala SvxLink-webpanelen: %s", exc)
-        return False
+class NodeAgent:
+    def __init__(self, portal_url, node_id, token, config_path, log_path, service,
+                 status_interval, command_interval):
+        self.node_id = node_id
+        self.config_path = config_path
+        self.status_interval = status_interval
+        self.command_interval = command_interval
+        self.headers = {"Authorization": f"Bearer {token}"}
+        self.status_url = f"{portal_url}/api/v1/agent/status"
+        self.radio_url = f"{portal_url}/api/v1/agent/radio"
+        self.commands_url = f"{portal_url}/api/v1/agent/commands"
+        self.watch = threading.Event()
+        self.status_wake = threading.Event()
+        self.radio_wake = threading.Event()
+        self.radio_lock = threading.Lock()
+        self.radio_queue = deque(maxlen=500)
+        self.collector = Collector(
+            config_path, log_path, service,
+            on_radio=self.queue_radio, on_change=lambda reason: self.status_wake.set(),
+        )
 
-    try:
-        request_json(status_url, payload={"node_id": node_id, **status}, headers=portal_headers)
-    except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
-        logging.warning("Kunde inte rapportera status till portalen: %s", exc)
-        return False
+    def queue_radio(self, snapshot):
+        if self.watch.is_set():
+            with self.radio_lock:
+                self.radio_queue.append({"t": int(time.time() * 1000), **snapshot})
+            self.radio_wake.set()
 
-    logging.info("Status skickad till portalen för nod %s.", node_id)
-    return True
+    def set_watch(self, value):
+        if value and not self.watch.is_set():
+            self.watch.set()
+            self.queue_radio(self.collector.radio_snapshot())
+        elif not value and self.watch.is_set():
+            self.watch.clear()
+            with self.radio_lock:
+                self.radio_queue.clear()
+
+    def status_loop(self):
+        while True:
+            try:
+                status = self.collector.snapshot()
+                response = request_json(
+                    self.status_url, payload={"node_id": self.node_id, **status},
+                    headers=self.headers,
+                )
+                if isinstance(response, dict):
+                    self.set_watch(response.get("watch") is True)
+            except NETWORK_ERRORS as exc:
+                logging.warning("Kunde inte rapportera status till portalen: %s", exc)
+            self.status_wake.wait(self.status_interval)
+            self.status_wake.clear()
+            # Coalesce bursts of changes into at most one report per second.
+            time.sleep(1)
+
+    def radio_loop(self):
+        while True:
+            self.radio_wake.wait(1)
+            self.radio_wake.clear()
+            if not self.watch.is_set():
+                continue
+            with self.radio_lock:
+                batch = [
+                    self.radio_queue.popleft()
+                    for _ in range(min(RADIO_BATCH_SIZE, len(self.radio_queue)))
+                ]
+                more = bool(self.radio_queue)
+            if not batch:
+                continue
+            try:
+                response = request_json(
+                    self.radio_url, payload={"events": batch}, headers=self.headers, timeout=5
+                )
+                if isinstance(response, dict):
+                    self.set_watch(response.get("watch") is True)
+            except NETWORK_ERRORS as exc:
+                logging.warning("Kunde inte strömma radiodata till portalen: %s", exc)
+                time.sleep(1)
+            if more:
+                self.radio_wake.set()
+            else:
+                time.sleep(0.1)
+
+    def command_loop(self):
+        while True:
+            watch = process_agent_commands(
+                self.commands_url, self.commands_url, self.headers, self.config_path
+            )
+            if watch is not None:
+                self.set_watch(watch)
+            time.sleep(self.command_interval)
+
+    def run(self):
+        self.collector.start()
+        for target, name in (
+            (self.radio_loop, "radio-stream"),
+            (self.command_loop, "commands"),
+        ):
+            threading.Thread(target=target, name=name, daemon=True).start()
+        self.status_loop()
 
 
 def run():
@@ -380,26 +413,16 @@ def run():
     token = required_environment("AGENT_TOKEN")
     if len(token) < 32:
         raise RuntimeError("AGENT_TOKEN måste innehålla minst 32 tecken.")
-    panel_url = os.environ.get("AGENT_PANEL_URL", "http://127.0.0.1:8090/api/status")
-    panel_user = required_environment("SVXLINK_WEB_USER")
-    panel_password = required_environment("SVXLINK_WEB_PASSWORD")
-    config_path = os.environ.get("SVXLINK_CONFIG", "/etc/svxlink/svxlink.conf")
-    interval = max(2, int(os.environ.get("AGENT_INTERVAL_SECONDS", "5")))
-    panel_auth = base64.b64encode(f"{panel_user}:{panel_password}".encode("utf-8")).decode("ascii")
-    portal_headers = {"Authorization": f"Bearer {token}"}
-    panel_headers = {"Authorization": f"Basic {panel_auth}"}
-    status_url = f"{portal_url}/api/v1/agent/status"
-    commands_url = f"{portal_url}/api/v1/agent/commands"
-    results_url = commands_url
-
-    while True:
-        report_status(
-            panel_url, status_url, node_id, config_path, panel_headers, portal_headers
-        )
-        process_agent_commands(
-            commands_url, results_url, portal_headers, config_path
-        )
-        time.sleep(interval)
+    NodeAgent(
+        portal_url,
+        node_id,
+        token,
+        os.environ.get("SVXLINK_CONFIG", "/etc/svxlink/svxlink.conf"),
+        os.environ.get("SVXLINK_LOGFILE", "/var/log/svxlink"),
+        os.environ.get("SVXLINK_SERVICE", "svxlink"),
+        max(1, int(os.environ.get("AGENT_INTERVAL_SECONDS", "5"))),
+        max(0.5, float(os.environ.get("AGENT_COMMAND_POLL_SECONDS", "1"))),
+    ).run()
 
 
 if __name__ == "__main__":
@@ -408,3 +431,5 @@ if __name__ == "__main__":
     except RuntimeError as exc:
         logging.error("%s", exc)
         raise SystemExit(1)
+
+

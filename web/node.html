@@ -13,7 +13,7 @@
       <div>
         <p class="eyebrow">NODDETALJER</p>
         <h1 id="node-name">Hämtar nod…</h1>
-        <p id="node-callsign" class="muted">SvxLink-status från nodens webpanel</p>
+        <p id="node-callsign" class="muted">Lokal SvxLink-status från nodagenten</p>
       </div>
       <div class="header-actions">
         <div id="updated" class="muted" role="status" aria-live="polite">Ansluter…</div>
@@ -28,14 +28,19 @@
     </section>
     <section class="panel">
       <div class="panel-heading">
-        <div><h2>Radiostatus</h2><p class="muted">Senast rapporterade värden från SvxLink-webpanelen.</p></div>
+        <div><h2>Radiostatus</h2><p class="muted">Direktström från nodens STATE_PTY. <span id="live-state">Ansluter…</span></p></div>
       </div>
       <div class="node-details">
         <div class="detail-card"><span>Radioläge</span><strong id="radio-mode">Okänd</strong></div>
         <div class="detail-card"><span>Signalstyrka</span><strong id="signal-level">Okänd</strong></div>
         <div class="detail-card"><span>Aktuell talgrupp</span><strong id="current-tg">Okänd</strong></div>
         <div class="detail-card"><span>SvxLink-logik</span><strong id="logic">Okänd</strong></div>
+        <div class="detail-card"><span>Senaste talare</span><strong id="tg-event">Okänd</strong></div>
+        <div class="detail-card"><span>Bevakade talgrupper</span><strong id="monitor-tgs">Okänd</strong></div>
       </div>
+      <h3>Mottagare och sändare</h3>
+      <ul id="radio-devices" class="log-lines"><li class="muted">Väntar på radiodata…</li></ul>
+      <p id="pty-checks" class="error" role="status" aria-live="polite"></p>
       <p id="error" class="error" role="status" aria-live="polite"></p>
     </section>
     <section class="panel">
@@ -87,7 +92,7 @@
         <li class="muted">Väntar på loggrapport…</li>
       </ol>
     </section>
-    <footer>Noden visas offline efter 30 sekunder utan statusrapport. Vyn uppdateras var femte sekund.</footer>
+    <footer>Noden visas offline efter 30 sekunder utan statusrapport. Vyn uppdateras var tredje sekund och radiodata strömmas live.</footer>
   </main>
   <script src="/assets/sidebar.js"></script>
   <script src="/assets/node.js"></script>
