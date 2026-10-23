@@ -86,6 +86,14 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .dtmf-controls { display: flex; gap: 9px; }
 .dtmf-controls input { min-width: 0; flex: 1; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #151515; color: var(--text); font: 16px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .08em; }
 .dtmf-form > p { margin: 6px 0 0; }
+.node-form { max-width: 680px; margin-top: 12px; }
+.node-form > label, .created-node > label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.node-form-controls { display: flex; flex-wrap: wrap; gap: 9px; }
+.node-form-controls input, .created-node input { min-width: 0; flex: 1; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #151515; color: var(--text); font: inherit; }
+.created-node { max-width: 680px; margin-top: 18px; padding: 14px; border: 1px solid var(--line); border-radius: 7px; background: #1a1a1a; }
+.created-node h3 { margin: 0; font-size: 15px; }
+.created-node p { margin: 4px 0 12px; }
+.created-node input { display: block; width: 100%; margin-bottom: 10px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .selection-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .node-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
 .node-choice { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: #1a1a1a; cursor: pointer; }

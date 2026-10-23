@@ -48,7 +48,23 @@
     </section>
     <section id="portal-settings" class="panel settings">
       <h2>Portalinställningar</h2>
-      <p class="muted">Nodidentiteter skapas på portalservern med kommandot <code>python3 -m portal.server provision-node --name "Nodnamn"</code>. Användarhantering och redigerbara portalinställningar tillkommer i nästa steg.</p>
+      <form id="create-node-form" class="node-form">
+        <p class="muted">Skapa en nodidentitet här i portalen. När noden skapats visas nod-ID och token, som behövs när agenten installeras på SvxLink-noden. Token visas bara en gång.</p>
+        <label for="new-node-name">Nodnamn</label>
+        <div class="node-form-controls">
+          <input id="new-node-name" name="name" type="text" maxlength="100" required autocomplete="off" placeholder="Exempel: Repeater north">
+          <button type="submit">Lägg till nod</button>
+        </div>
+      </form>
+      <p id="create-node-error" class="error" role="status" aria-live="polite"></p>
+      <section id="created-node" class="created-node" aria-labelledby="created-node-heading" hidden>
+        <h3 id="created-node-heading">Nodidentitet skapad</h3>
+        <p class="muted">Spara uppgifterna säkert och ange dem i agentens installationsprompt. Den här token kan inte visas igen.</p>
+        <label for="created-node-id">Nod-ID</label>
+        <input id="created-node-id" type="text" readonly>
+        <label for="created-node-token">Engångstoken</label>
+        <input id="created-node-token" type="text" readonly>
+      </section>
     </section>
     <footer>Offline efter 30 sekunder utan statusrapport. Uppdateras var femte sekund.</footer>
   </main>
@@ -109,6 +125,34 @@
         document.getElementById('updated').textContent = 'Uppdatering misslyckades';
       }
     }
+    document.getElementById('create-node-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const button = form.querySelector('button[type="submit"]');
+      const error = document.getElementById('create-node-error');
+      const result = document.getElementById('created-node');
+      error.textContent = '';
+      result.hidden = true;
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/nodes', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({name: document.getElementById('new-node-name').value})
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        document.getElementById('created-node-id').value = data.node_id;
+        document.getElementById('created-node-token').value = data.token;
+        result.hidden = false;
+        form.reset();
+        refresh();
+      } catch (cause) {
+        error.textContent = `Kunde inte skapa noden: ${cause.message}`;
+      } finally {
+        button.disabled = false;
+      }
+    });
     refresh();
     setInterval(refresh, 5000);
   </script>

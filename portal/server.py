@@ -127,6 +127,10 @@ def provision_node(name):
     clean_name = name.strip()
     if not clean_name or len(clean_name) > 100:
         raise ValueError("Nodnamnet måste innehålla 1–100 tecken.")
+    try:
+        clean_name.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("Nodnamnet måste innehålla giltig Unicode-text.") from exc
     node_id = uuid.uuid4().hex
     token = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc).isoformat()
@@ -662,6 +666,23 @@ class PortalHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/api/nodes":
+            if not self.require_admin():
+                return
+            try:
+                payload = self.read_json_body(MAX_REQUEST_BYTES)
+                if (
+                    not isinstance(payload, dict)
+                    or set(payload) != {"name"}
+                    or not isinstance(payload["name"], str)
+                ):
+                    raise ValueError("Begäran måste innehålla nodnamnet som text.")
+                credentials = provision_node(payload["name"])
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            self.send_json(201, credentials)
+            return
         if path == "/api/dtmf-buttons":
             if not self.require_admin():
                 return

@@ -23,6 +23,90 @@ from portal.server import (
 
 
 class PortalStatusTests(unittest.TestCase):
+    def test_admin_can_create_node_from_dashboard_api(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {
+                "PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3"),
+                "PORTAL_ADMIN_USER": "admin",
+                "PORTAL_ADMIN_PASSWORD": "this-is-a-long-test-password",
+            },
+        ):
+            server = ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://127.0.0.1:{server.server_port}"
+                with self.assertRaises(HTTPError) as unauthorized:
+                    urlopen(
+                        Request(
+                            f"{base_url}/api/nodes",
+                            data=json.dumps({"name": "New node"}).encode("utf-8"),
+                            headers={"Content-Type": "application/json"},
+                        ),
+                        timeout=2,
+                    )
+                self.assertEqual(unauthorized.exception.code, 401)
+
+                credentials_header = base64.b64encode(
+                    b"admin:this-is-a-long-test-password"
+                ).decode()
+                headers = {
+                    "Authorization": f"Basic {credentials_header}",
+                    "Content-Type": "application/json",
+                }
+                with urlopen(
+                    Request(f"{base_url}/", headers=headers), timeout=2
+                ) as response:
+                    dashboard = response.read().decode("utf-8")
+                self.assertIn('id="create-node-form"', dashboard)
+                self.assertIn('id="created-node-token"', dashboard)
+
+                invalid_request = Request(
+                    f"{base_url}/api/nodes",
+                    data=json.dumps({"name": "  "}).encode("utf-8"),
+                    headers=headers,
+                )
+                with self.assertRaises(HTTPError) as invalid:
+                    urlopen(invalid_request, timeout=2)
+                self.assertEqual(invalid.exception.code, 400)
+
+                invalid_unicode_request = Request(
+                    f"{base_url}/api/nodes",
+                    data=b'{"name":"\\ud800"}',
+                    headers=headers,
+                )
+                with self.assertRaises(HTTPError) as invalid_unicode:
+                    urlopen(invalid_unicode_request, timeout=2)
+                self.assertEqual(invalid_unicode.exception.code, 400)
+
+                create_request = Request(
+                    f"{base_url}/api/nodes",
+                    data=json.dumps({"name": "Repeater north"}).encode("utf-8"),
+                    headers=headers,
+                )
+                with urlopen(create_request, timeout=2) as response:
+                    self.assertEqual(response.status, 201)
+                    credentials = json.loads(response.read().decode("utf-8"))
+
+                self.assertEqual(credentials["name"], "Repeater north")
+                self.assertEqual(len(credentials["node_id"]), 32)
+                self.assertTrue(credentials["token"])
+                with database() as connection:
+                    row = connection.execute(
+                        "SELECT token_hash FROM nodes WHERE id = ?",
+                        (credentials["node_id"],),
+                    ).fetchone()
+                self.assertEqual(
+                    row["token_hash"],
+                    hashlib.sha256(credentials["token"].encode("utf-8")).hexdigest(),
+                )
+                self.assertNotEqual(row["token_hash"], credentials["token"])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
     def test_accepts_and_normalizes_status(self):
         status = validate_status(
             {

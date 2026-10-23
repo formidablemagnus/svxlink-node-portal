@@ -70,9 +70,11 @@ The installer prompts for the portal credentials, installs
 service listens on `127.0.0.1:8080`; configure a TLS-terminating reverse
 proxy in front of it and do not expose the HTTP port to untrusted networks.
 
-Next, create an identity for each node. The command prints the node's bearer
-token once; transfer it securely and do not save it in shell history or source
-code:
+Next, create an identity for each node from **Lägg till nod** in the portal
+dashboard. The node ID and bearer token are shown after creation; the token is
+shown only once. Transfer it securely and enter both values when installing
+the agent on the node. Do not save the token in shell history or source code.
+The command-line alternative prints the token once as well:
 
 ```bash
 sudo -u svxlink-node-portal sh -c \
