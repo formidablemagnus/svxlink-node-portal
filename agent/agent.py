@@ -116,6 +116,24 @@ class RejectRedirects(HTTPRedirectHandler):
         return None
 
 
+def report_status(panel_url, status_url, node_id, config_path, panel_headers, portal_headers):
+    try:
+        local_status = request_json(panel_url, headers=panel_headers)
+        status = make_status(local_status, config_path)
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+        logging.warning("Kunde inte hämta status från den lokala SvxLink-webpanelen: %s", exc)
+        return False
+
+    try:
+        request_json(status_url, payload={"node_id": node_id, **status}, headers=portal_headers)
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+        logging.warning("Kunde inte rapportera status till portalen: %s", exc)
+        return False
+
+    logging.info("Status skickad till portalen för nod %s.", node_id)
+    return True
+
+
 def run():
     portal_url = validate_portal_url(required_environment("AGENT_PORTAL_URL"))
     node_id = required_environment("AGENT_NODE_ID")
@@ -133,13 +151,9 @@ def run():
     status_url = f"{portal_url}/api/v1/agent/status"
 
     while True:
-        try:
-            local_status = request_json(panel_url, headers=panel_headers)
-            status = make_status(local_status, config_path)
-            request_json(status_url, payload={"node_id": node_id, **status}, headers=portal_headers)
-            logging.info("Status skickad till portalen för nod %s.", node_id)
-        except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
-            logging.warning("Statusrapporteringen misslyckades: %s", exc)
+        report_status(
+            panel_url, status_url, node_id, config_path, panel_headers, portal_headers
+        )
         time.sleep(interval)
 
 

@@ -1,8 +1,10 @@
 import tempfile
 import unittest
+from urllib.error import URLError
 from pathlib import Path
+from unittest.mock import patch
 
-from agent.agent import make_status, read_logic_info, validate_portal_url
+from agent.agent import make_status, read_logic_info, report_status, validate_portal_url
 
 
 class AgentStatusTests(unittest.TestCase):
@@ -48,6 +50,49 @@ class AgentStatusTests(unittest.TestCase):
     def test_rejects_incomplete_panel_status(self):
         with self.assertRaisesRegex(ValueError, "tjänstestatus"):
             make_status({"service_status": "active"}, "/missing/svxlink.conf")
+
+    def test_logs_local_webpanel_timeout_separately(self):
+        with patch("agent.agent.request_json", side_effect=URLError("timed out")) as request:
+            with patch("agent.agent.logging.warning") as warning:
+                reported = report_status(
+                    "http://127.0.0.1:8090/api/status",
+                    "https://portal.example/api/v1/agent/status",
+                    "node-1",
+                    "/etc/svxlink/svxlink.conf",
+                    {"Authorization": "Basic test"},
+                    {"Authorization": "Bearer test"},
+                )
+
+        self.assertFalse(reported)
+        request.assert_called_once()
+        self.assertIn("lokala SvxLink-webpanelen", warning.call_args.args[0])
+
+    def test_logs_portal_timeout_separately(self):
+        with patch(
+            "agent.agent.request_json",
+            side_effect=[
+                {
+                    "active": True,
+                    "service_status": "active",
+                    "current_tg": None,
+                    "radio": {},
+                },
+                URLError("timed out"),
+            ],
+        ):
+            with patch("agent.agent.logging.warning") as warning:
+                with patch("agent.agent.make_status", return_value={"active": True}):
+                    reported = report_status(
+                        "http://127.0.0.1:8090/api/status",
+                        "https://portal.example/api/v1/agent/status",
+                        "node-1",
+                        "/etc/svxlink/svxlink.conf",
+                        {"Authorization": "Basic test"},
+                        {"Authorization": "Bearer test"},
+                    )
+
+        self.assertFalse(reported)
+        self.assertIn("portalen", warning.call_args.args[0])
 
 
 if __name__ == "__main__":
