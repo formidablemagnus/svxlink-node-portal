@@ -123,27 +123,35 @@ def node_rows():
         rows = connection.execute(
             "SELECT id, name, status_json, last_seen FROM nodes ORDER BY name COLLATE NOCASE"
         ).fetchall()
+    return [node_record(row) for row in rows]
+
+
+def node_by_id(node_id):
+    with database() as connection:
+        row = connection.execute(
+            "SELECT id, name, status_json, last_seen FROM nodes WHERE id = ?",
+            (node_id,),
+        ).fetchone()
+    return node_record(row) if row else None
+
+
+def node_record(row):
     now = datetime.now(timezone.utc)
-    result = []
-    for row in rows:
-        last_seen = row["last_seen"]
-        online = False
-        if last_seen:
-            try:
-                seen_at = datetime.fromisoformat(last_seen)
-                online = (now - seen_at).total_seconds() <= ONLINE_WINDOW_SECONDS
-            except ValueError:
-                logging.error("Ogiltig last_seen-tid för nod %s.", row["id"])
-        result.append(
-            {
-                "id": row["id"],
-                "name": row["name"],
-                "online": online,
-                "last_seen": last_seen,
-                "status": json.loads(row["status_json"]) if row["status_json"] else None,
-            }
-        )
-    return result
+    last_seen = row["last_seen"]
+    online = False
+    if last_seen:
+        try:
+            seen_at = datetime.fromisoformat(last_seen)
+            online = (now - seen_at).total_seconds() <= ONLINE_WINDOW_SECONDS
+        except ValueError:
+            logging.error("Ogiltig last_seen-tid för nod %s.", row["id"])
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "online": online,
+        "last_seen": last_seen,
+        "status": json.loads(row["status_json"]) if row["status_json"] else None,
+    }
 
 
 def admin_credentials():
@@ -204,6 +212,18 @@ class PortalHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
+        elif path.startswith("/nodes/"):
+            node_id = path[len("/nodes/"):]
+            if not node_id or "/" in node_id or node_by_id(node_id) is None:
+                self.send_json(404, {"error": "Noden hittades inte."})
+                return
+            body = (WEB_ROOT / "node.html").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
         elif path == "/assets/style.css":
             body = (WEB_ROOT / "style.css").read_bytes()
             self.send_response(200)
@@ -213,6 +233,13 @@ class PortalHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif path == "/api/nodes":
             self.send_json(200, {"nodes": node_rows()})
+        elif path.startswith("/api/nodes/"):
+            node_id = path[len("/api/nodes/"):]
+            node = node_by_id(node_id) if node_id and "/" not in node_id else None
+            if node is None:
+                self.send_json(404, {"error": "Noden hittades inte."})
+            else:
+                self.send_json(200, {"node": node})
         else:
             self.send_json(404, {"error": "Sidan hittades inte."})
 

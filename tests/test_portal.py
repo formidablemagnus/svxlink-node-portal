@@ -91,6 +91,34 @@ class PortalStatusTests(unittest.TestCase):
                 self.assertTrue(dashboard["nodes"][0]["online"])
                 self.assertEqual(dashboard["nodes"][0]["status"]["radio"]["mode"], "rx")
 
+                detail_request = Request(
+                    f"{base_url}/api/nodes/{node['node_id']}",
+                    headers={"Authorization": f"Basic {credentials}"},
+                )
+                with urlopen(detail_request, timeout=2) as response:
+                    detail = json.loads(response.read().decode("utf-8"))["node"]
+                self.assertEqual(detail["id"], node["node_id"])
+                self.assertEqual(detail["status"]["callsign"], "SA7TEST")
+                self.assertEqual(detail["status"]["current_tg"], "240")
+
+                page_request = Request(
+                    f"{base_url}/nodes/{node['node_id']}",
+                    headers={"Authorization": f"Basic {credentials}"},
+                )
+                with urlopen(page_request, timeout=2) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertIn("Radiostatus", response.read().decode("utf-8"))
+
+                with self.assertRaises(HTTPError) as missing_node:
+                    urlopen(
+                        Request(
+                            f"{base_url}/api/nodes/missing-node",
+                            headers={"Authorization": f"Basic {credentials}"},
+                        ),
+                        timeout=2,
+                    )
+                self.assertEqual(missing_node.exception.code, 404)
+
                 with self.assertRaises(HTTPError) as admin_error:
                     urlopen(f"{base_url}/api/nodes", timeout=2)
                 self.assertEqual(admin_error.exception.code, 401)

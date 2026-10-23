@@ -20,6 +20,7 @@ nav a, .nav-node { display: block; padding: 9px 11px; border-radius: 6px; color:
 nav a:hover, nav a.active { background: #292929; color: white; }
 .nav-heading { padding: 22px 11px 5px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .12em; }
 .nav-node { padding-left: 22px; overflow-wrap: anywhere; }
+.nav-node:hover { background: #292929; }
 .sidebar-footer { margin-top: auto; padding: 12px 10px; color: var(--muted); font-size: 12px; }
 main { max-width: 1500px; margin-left: 220px; padding: 30px clamp(20px, 4vw, 60px); }
 header, .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
@@ -44,11 +45,21 @@ th { padding: 10px; color: var(--muted); font-size: 10px; letter-spacing: .09em;
 td { padding: 13px 10px; border-top: 1px solid #343434; white-space: nowrap; }
 td strong, td small { display: block; }
 td small { margin-top: 2px; color: var(--muted); }
+td a { color: var(--text); text-decoration: none; }
+td a:hover { color: var(--blue); text-decoration: underline; }
 .state { display: inline-flex; align-items: center; gap: 7px; }
 .state::before { width: 8px; height: 8px; border-radius: 50%; content: ""; background: currentColor; }
 .online { color: var(--green); }
 .offline { color: var(--muted); }
 .error { color: #ff9b9f; }
+.node-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.detail-card { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: #1a1a1a; }
+.detail-card span { display: block; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+.detail-card strong { display: block; margin-top: 5px; font-size: 19px; overflow-wrap: anywhere; }
+.detail-card small { display: block; margin-top: 3px; color: var(--muted); }
+.detail-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.detail-meta dt { color: var(--muted); font-size: 12px; }
+.detail-meta dd { margin: 3px 0 0; overflow-wrap: anywhere; }
 code { color: #b7c8ff; overflow-wrap: anywhere; }
 footer { padding: 0 3px; color: var(--muted); font-size: 12px; }
 @media (max-width: 900px) {
@@ -66,4 +77,5 @@ footer { padding: 0 3px; color: var(--muted); font-size: 12px; }
   h1 { font-size: 23px; }
   .panel { padding: 14px; }
   th, td { padding: 10px 8px; }
+  .node-details, .detail-meta { grid-template-columns: 1fr; }
 }

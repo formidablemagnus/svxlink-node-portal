@@ -62,8 +62,9 @@
       nav.replaceChildren();
       if (!nodes.length) nav.textContent = 'Inga registrerade noder';
       for (const node of nodes) {
-        const navItem = document.createElement('span');
+        const navItem = document.createElement('a');
         navItem.className = 'nav-node';
+        navItem.href = `/nodes/${encodeURIComponent(node.id)}`;
         navItem.textContent = node.name;
         nav.append(navItem);
       }
@@ -82,7 +83,7 @@
         const radio = status.radio || {};
         const lastSeen = node.last_seen ? new Date(node.last_seen).toLocaleString('sv-SE') : 'Aldrig';
         return `<tr>
-          <td><strong>${esc(node.name)}</strong>${status.callsign ? `<small>${esc(status.callsign)}</small>` : ''}</td>
+          <td><strong><a href="/nodes/${encodeURIComponent(node.id)}">${esc(node.name)}</a></strong>${status.callsign ? `<small>${esc(status.callsign)}</small>` : ''}</td>
           <td><span class="state ${node.online ? 'online' : 'offline'}">${node.online ? esc(status.service_status || 'Online') : 'Offline'}</span></td>
           <td>${esc(radioNames[radio.mode] || 'Okänd')}${radio.mode === 'rx' && Number.isInteger(radio.signal_level) ? `<small>Signal ${esc(radio.signal_level)}%</small>` : ''}</td>
           <td>${status.current_tg ? `TG ${esc(status.current_tg)}` : 'Okänd'}</td>

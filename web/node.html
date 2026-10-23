@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nodstatus – SvxLink Portal</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/">SvxLink <span>PORTAL</span></a>
+    <nav aria-label="Huvudmeny">
+      <a href="/">Dashboard</a>
+      <div class="nav-heading">NODER</div>
+      <div id="node-nav" class="node-nav">Läser noder…</div>
+    </nav>
+    <div class="sidebar-footer">Central nodöversikt</div>
+  </aside>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">NODDETALJER</p>
+        <h1 id="node-name">Hämtar nod…</h1>
+        <p id="node-callsign" class="muted">SvxLink-status från nodens webpanel</p>
+      </div>
+      <div id="updated" class="muted" role="status" aria-live="polite">Ansluter…</div>
+    </header>
+    <section class="summary" aria-label="Aktuell nodstatus">
+      <article><span>NODANSLUTNING</span><strong id="online">—</strong></article>
+      <article><span>SVXLINK-TJÄNST</span><strong id="service">—</strong></article>
+      <article><span>RADIO</span><strong id="radio">—</strong></article>
+      <article><span>TALGRUPP</span><strong id="talkgroup">—</strong></article>
+    </section>
+    <section class="panel">
+      <div class="panel-heading">
+        <div><h2>Radiostatus</h2><p class="muted">Senast rapporterade värden från SvxLink-webpanelen.</p></div>
+      </div>
+      <div class="node-details">
+        <div class="detail-card"><span>Radioläge</span><strong id="radio-mode">Okänd</strong></div>
+        <div class="detail-card"><span>Signalstyrka</span><strong id="signal-level">Okänd</strong></div>
+        <div class="detail-card"><span>Aktuell talgrupp</span><strong id="current-tg">Okänd</strong></div>
+        <div class="detail-card"><span>SvxLink-logik</span><strong id="logic">Okänd</strong></div>
+      </div>
+      <p id="error" class="error" role="status" aria-live="polite"></p>
+    </section>
+    <section class="panel">
+      <div class="panel-heading">
+        <div><h2>Nodinformation</h2><p class="muted">Kontakt- och identitetsinformation för noden.</p></div>
+      </div>
+      <dl class="detail-meta">
+        <div><dt>Anropssignal</dt><dd id="callsign">Okänd</dd></div>
+        <div><dt>Tjänstebeskrivning</dt><dd id="service-status">Okänd</dd></div>
+        <div><dt>Senast sedd</dt><dd id="last-seen">Aldrig</dd></div>
+        <div><dt>Nod-ID</dt><dd id="node-id">—</dd></div>
+      </dl>
+    </section>
+    <footer>Noden visas offline efter 30 sekunder utan statusrapport. Vyn uppdateras var femte sekund.</footer>
+  </main>
+  <script>
+    const radioNames = {tx: 'TX', rx: 'RX', idle: 'Vila', unknown: 'Okänd'};
+    const nodeId = window.location.pathname.split('/').filter(Boolean).pop();
+    const setText = (id, value) => { document.getElementById(id).textContent = value; };
+
+    function renderNode(node) {
+      const status = node.status || {};
+      const radio = status.radio || {};
+      const mode = radioNames[radio.mode] || 'Okänd';
+      const signal = Number.isInteger(radio.signal_level) ? `${radio.signal_level}%` : 'Okänd';
+      const lastSeen = node.last_seen ? new Date(node.last_seen).toLocaleString('sv-SE') : 'Aldrig';
+      setText('node-name', node.name);
+      setText('node-callsign', status.callsign || 'SvxLink-status från nodens webpanel');
+      setText('online', node.online ? 'Online' : 'Offline');
+      setText('service', status.service_status || 'Okänd');
+      setText('radio', mode);
+      setText('talkgroup', status.current_tg ? `TG ${status.current_tg}` : 'Okänd');
+      setText('radio-mode', mode);
+      setText('signal-level', signal);
+      setText('current-tg', status.current_tg ? `TG ${status.current_tg}` : 'Okänd');
+      setText('logic', status.logic || 'Okänd');
+      setText('callsign', status.callsign || 'Okänd');
+      setText('service-status', status.service_status || 'Okänd');
+      setText('last-seen', lastSeen);
+      setText('node-id', node.id);
+      document.getElementById('online').className = node.online ? 'online' : 'offline';
+      document.getElementById('error').textContent = node.online
+        ? ''
+        : 'Noden är offline. Visade statusvärden kommer från den senaste rapporten.';
+      document.getElementById('updated').textContent = `Uppdaterad ${new Date().toLocaleTimeString('sv-SE')}`;
+    }
+
+    async function refresh() {
+      try {
+        const response = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}`, {cache: 'no-store'});
+        if (response.status === 404) throw new Error('Noden hittades inte.');
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        renderNode(data.node);
+      } catch (error) {
+        setText('error', `Kunde inte hämta nodstatus: ${error.message}`);
+        setText('updated', 'Uppdatering misslyckades');
+      }
+    }
+
+    async function loadNodeNavigation() {
+      try {
+        const response = await fetch('/api/nodes', {cache: 'no-store'});
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        const nav = document.getElementById('node-nav');
+        nav.replaceChildren();
+        for (const node of data.nodes) {
+          const link = document.createElement('a');
+          link.className = 'nav-node';
+          link.href = `/nodes/${encodeURIComponent(node.id)}`;
+          link.textContent = node.name;
+          nav.append(link);
+        }
+        if (!data.nodes.length) nav.textContent = 'Inga registrerade noder';
+      } catch (error) {
+        setText('error', `Kunde inte läsa nodlistan: ${error.message}`);
+      }
+    }
+    loadNodeNavigation();
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>

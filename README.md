@@ -8,7 +8,7 @@ remote control and editing are intentionally not enabled yet.
 
 - `portal/` — central HTTP service, SQLite node registry and dashboard.
 - `agent/` — lightweight agent that reads the local webpanel status and reports
-  a validated status snapshot to the portal over HTTPS.
+  a validated status snapshot to the portal over HTTP or HTTPS.
 - `web/` — self-hosted dashboard assets; no external frontend dependencies.
 - `install.sh` and `systemd/` — role-based installer and service units.
 
@@ -136,7 +136,10 @@ following the latest `main`.
 `POST /api/v1/agent/status` accepts a bearer-authenticated JSON report. The
 portal validates and stores only service state, radio mode/signal, current
 talkgroup, logic and callsign. Reports are considered online for 30 seconds.
-`GET /api/nodes` and the dashboard require portal Basic authentication.
+`GET /api/nodes`, `GET /api/nodes/<node-id>`, the dashboard and node detail
+pages require portal Basic authentication. Select a node from the dashboard
+to view its latest service, radio, signal, talkgroup, logic, callsign and
+last-seen information. Log lines are not yet forwarded from the webpanel.
 
 ## Tests
 
@@ -146,8 +149,8 @@ python3 -m unittest discover -s tests -v
 
 ## Roadmap
 
-1. Add authenticated node detail pages and reuse the existing webpanel's
-   read-only status and log views.
+1. Extend node detail pages with read-only status and log views from the
+   existing webpanel.
 2. Add explicitly authorized remote controls, configuration editing,
    auditing and portal user management.
 3. Add documented compatibility checks and a guided reverse-proxy setup.
