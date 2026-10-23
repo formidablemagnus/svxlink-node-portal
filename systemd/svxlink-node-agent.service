@@ -19,6 +19,7 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/etc/svxlink
+ReadWritePaths=-/var/spool/cron
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

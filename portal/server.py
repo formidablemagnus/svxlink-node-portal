@@ -34,6 +34,7 @@ MAX_COMMAND_RESULT_BYTES = MAX_CONFIG_BYTES * 6 + 65536
 MAX_DTMF_SEQUENCE_LENGTH = 64
 MAX_DTMF_NODES = 100
 MAX_DTMF_BUTTONS = 30
+MAX_SCHEDULES = 100
 AGENT_COMMAND_TTL_SECONDS = 300
 ONLINE_WINDOW_SECONDS = 30
 CONFIG_DOCUMENTS = {"svxlink.conf", "node_info.json"}
@@ -45,6 +46,7 @@ STATIC_ASSETS = {
     "index.js": JS,
     "node.js": JS,
     "config.js": JS,
+    "schedules.js": JS,
     "dtmf.js": JS,
 }
 VALID_RADIO_MODES = {"tx", "rx", "idle", "unknown"}
@@ -505,11 +507,33 @@ def replace_dtmf_buttons(buttons):
         )
 
 
+def validate_schedules_command(payload):
+    if not isinstance(payload, dict) or payload.get("action") != "schedules":
+        raise ValueError("Ogiltig schemaläggningsåtgärd.")
+    if payload.get("operation") == "read" and set(payload) == {"action", "operation"}:
+        return {"action": "schedules", "operation": "read"}
+    if payload.get("operation") != "write" or set(payload) != {
+        "action", "operation", "schedules", "sha256"
+    }:
+        raise ValueError("Ogiltig schemaläggningsåtgärd.")
+    schedules = payload["schedules"]
+    if not isinstance(schedules, list) or len(schedules) > MAX_SCHEDULES:
+        raise ValueError(f"Ange högst {MAX_SCHEDULES} schemaläggningar.")
+    for item in schedules:
+        if not isinstance(item, dict) or not {"dtmf", "minute", "hour", "day", "month", "weekday"} <= set(item):
+            raise ValueError("Ogiltig schemaläggning.")
+    if not isinstance(payload["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", payload["sha256"]):
+        raise ValueError("Ogiltig kontrollsumma.")
+    return payload
+
+
 def validate_agent_command(payload):
     if isinstance(payload, dict) and payload.get("action") == "dtmf":
         return validate_dtmf_command(payload)
     if isinstance(payload, dict) and payload.get("action") == "service":
         return validate_service_command(payload)
+    if isinstance(payload, dict) and payload.get("action") == "schedules":
+        return validate_schedules_command(payload)
     return validate_config_command(payload)
 
 
@@ -649,6 +673,16 @@ def complete_agent_command(node_id, command_id, result):
     elif command["action"] == "service":
         if set(result) != {"ok"}:
             raise ValueError("Tjänstresultatet har ogiltigt format.")
+    elif command["action"] == "schedules":
+        if set(result) != {"ok", "schedules", "other_lines", "cron_target", "sha256"} or not (
+            isinstance(result["schedules"], list)
+            and isinstance(result["other_lines"], list)
+            and all(isinstance(line, str) for line in result["other_lines"])
+            and isinstance(result["cron_target"], str)
+            and isinstance(result["sha256"], str)
+            and re.fullmatch(r"[0-9a-f]{64}", result["sha256"])
+        ):
+            raise ValueError("Schemaresultatet har ogiltigt format.")
     else:
         raise ValueError("Okänd konfigurationsåtgärd.")
     try:
@@ -792,6 +826,9 @@ class PortalHandler(BaseHTTPRequestHandler):
             elif len(path_parts) == 2 and path_parts[1] == "config":
                 node_id = path_parts[0]
                 page = "config.html"
+            elif len(path_parts) == 2 and path_parts[1] == "schedules":
+                node_id = path_parts[0]
+                page = "schedules.html"
             else:
                 self.send_json(404, {"error": "Sidan hittades inte."})
                 return

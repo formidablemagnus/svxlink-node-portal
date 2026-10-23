@@ -13,6 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from agent import schedules
 from agent.collector import Collector, read_config_sections
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -262,7 +263,24 @@ def execute_agent_command(command, config_path):
         return execute_dtmf_command(command, config_path)
     if isinstance(command, dict) and command.get("action") == "service":
         return execute_service_command(command)
+    if isinstance(command, dict) and command.get("action") == "schedules":
+        return execute_schedules(command, config_path)
     return execute_config_command(command)
+
+
+def execute_schedules(command, config_path):
+    command_id = command.get("id")
+    if not isinstance(command_id, str) or not re.fullmatch(r"[0-9a-f]{32}", command_id):
+        raise ValueError("Ogiltigt ID för schemaläggningsåtgärden.")
+    try:
+        target = read_dtmf_control_paths(config_path)[0]
+        schedules.validate_target(target)
+    except ValueError:
+        target = schedules.DEFAULT_DTMF_TARGET
+    try:
+        return schedules.execute_schedules_command(command, target)
+    except RuntimeError as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 def process_agent_commands(commands_url, results_url, headers, config_path):

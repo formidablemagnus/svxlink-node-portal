@@ -116,6 +116,22 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .preset-editor { margin: 0 0 12px; padding: 0; list-style: none; }
 .preset-editor li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 code { color: #b7c8ff; overflow-wrap: anywhere; }
+.cron-fields { display: grid; grid-template-columns: repeat(5, minmax(90px, 1fr)); gap: 9px; }
+.cron-field { display: flex; flex-direction: column; gap: 4px; }
+.cron-field.grow { flex: 1; }
+.cron-field input { width: 100%; min-width: 0; }
+.cron-preview { overflow: auto; margin: 0; padding: 12px; background: #151515; border: 1px solid var(--line); border-radius: 7px; font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.schedule-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 2px; border-bottom: 1px solid var(--line); }
+.schedule-info { min-width: 0; overflow-wrap: anywhere; }
+.schedule-description { margin: 3px 0; color: var(--blue); font-weight: 650; }
+.schedule-actions { display: flex; flex-shrink: 0; gap: 7px; }
+.schedule-list-actions { margin-top: 12px; }
+.schedule-other { margin-top: 14px; }
+.badge { padding: 3px 10px; border: 1px solid var(--line); border-radius: 20px; font-size: 12px; white-space: nowrap; }
+@media (max-width: 640px) {
+  .cron-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .schedule-row { align-items: flex-start; flex-direction: column; }
+}
 footer { padding: 0 3px; color: var(--muted); font-size: 12px; }
 .panel.compact { padding: 12px 16px; }
 .panel.compact .panel-heading { margin-bottom: 10px; }

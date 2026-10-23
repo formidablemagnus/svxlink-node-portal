@@ -2,6 +2,7 @@ const radioNames = {tx: 'TX', rx: 'RX', idle: 'Vila', unknown: 'Okänd'};
 const nodeId = window.location.pathname.split('/').filter(Boolean).pop();
 const setText = (id, value) => { document.getElementById(id).textContent = value; };
 document.getElementById('config-link').href = `/nodes/${encodeURIComponent(nodeId)}/config`;
+document.getElementById('schedules-link').href = `/nodes/${encodeURIComponent(nodeId)}/schedules`;
 const dtmfForm = document.getElementById('dtmf-form');
 const dtmfInput = document.getElementById('dtmf-sequence');
 const dtmfButton = document.getElementById('dtmf-send');

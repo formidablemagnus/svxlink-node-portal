@@ -108,7 +108,7 @@ install_agent_config_helper() {
   local sudoers_tmp
   sudoers_tmp="$(mktemp /etc/sudoers.d/svxlink-node-portal-agent.XXXXXX)"
   printf '%s\n' \
-    'svxlink ALL=(root) NOPASSWD: /usr/local/libexec/svxlink-node-portal-config, /usr/bin/systemctl start svxlink.service, /usr/bin/systemctl stop svxlink.service' \
+    'svxlink ALL=(root) NOPASSWD: /usr/local/libexec/svxlink-node-portal-config, /usr/bin/systemctl start svxlink.service, /usr/bin/systemctl stop svxlink.service, /usr/bin/crontab -u svxlink -l, /usr/bin/crontab -u svxlink -, /usr/bin/crontab -u svxlink -r' \
     > "$sudoers_tmp"
   chmod 0440 "$sudoers_tmp"
   if ! visudo -cf "$sudoers_tmp"; then

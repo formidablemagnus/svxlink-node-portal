@@ -82,7 +82,7 @@
       const href = `/nodes/${encodeURIComponent(node.id)}`;
       link.className = `nav-node ${node.online ? 'node-online' : 'node-offline'}`;
       link.href = href;
-      if (currentPath() === href || currentPath() === `${href}/config`) link.classList.add('active');
+      if (currentPath() === href || currentPath() === `${href}/config` || currentPath() === `${href}/schedules`) link.classList.add('active');
       link.title = `${LOGIC_TITLES[type]} – ${node.online ? 'online' : 'offline'}`;
       const icon = document.createElement('span');
       icon.className = `node-icon logic-${type}`;

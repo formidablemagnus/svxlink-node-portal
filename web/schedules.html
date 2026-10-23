@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Schemaläggning – SvxLink Portal</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <aside class="sidebar" id="sidebar" data-active="node"></aside>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">SCHEMALÄGGNING</p>
+        <h1 id="node-name">Hämtar nod…</h1>
+        <p class="muted">Schemalagda DTMF-kommandon i nodens crontab</p>
+      </div>
+      <a id="detail-link" class="button-link" href="#">Tillbaka till noddetaljer</a>
+    </header>
+    <section class="panel">
+      <div class="panel-heading">
+        <div>
+          <h2>Schemalagda DTMF-kommandon</h2>
+          <p class="muted">Återkommande DTMF-sändningar i användaren svxlinks crontab. Övriga crontab-rader lämnas orörda. Schemaläggningar skapade i SvxLink Webpanel visas och kan ändras här.</p>
+        </div>
+        <div class="badge" id="schedule-count">Läser crontab…</div>
+      </div>
+      <p id="schedule-message" class="editor-status muted" role="status" aria-live="polite"></p>
+      <div id="schedule-list"></div>
+      <div class="config-actions schedule-list-actions">
+        <button id="save-schedules" type="button" disabled>Spara ändringar i crontab</button>
+        <button id="reload-schedules" type="button">Läs om crontab</button>
+      </div>
+      <details class="schedule-other">
+        <summary>Visa övriga crontab-rader (skrivskyddat)</summary>
+        <pre class="cron-preview" id="other-crontab">Läser crontab…</pre>
+      </details>
+    </section>
+    <section class="panel">
+      <h2 id="form-title">Skapa schemaläggning</h2>
+      <form id="schedule-form" class="dtmf-form">
+        <div class="dtmf-controls">
+          <label class="cron-field grow">Namn (valfritt)<input id="schedule-label" maxlength="40" value="TG 2407" placeholder="Ex. TG 2407"></label>
+          <label class="cron-field grow">DTMF-kod<input id="schedule-dtmf" maxlength="20" value="942407364#" pattern="[0-9*#]{1,20}" autocomplete="off" required></label>
+        </div>
+        <p class="muted">Cron-fält i ordning: minut, timme, dag i månaden, månad, veckodag (0=söndag, 1=måndag … 6=lördag, 7=söndag). Fält kan innehålla *, ett värde, intervall (1-5), lista (1,3,5) eller steg (*/10).</p>
+        <div class="cron-fields">
+          <label class="cron-field">Minut<input id="cron-minute" value="45" maxlength="20"></label>
+          <label class="cron-field">Timme<input id="cron-hour" value="19" maxlength="20"></label>
+          <label class="cron-field">Dag i månaden<input id="cron-day" value="*" maxlength="20"></label>
+          <label class="cron-field">Månad<input id="cron-month" value="*" maxlength="20"></label>
+          <label class="cron-field">Veckodag<input id="cron-weekday" value="4" maxlength="20"></label>
+        </div>
+        <h3>Förhandsvisning av crontab-rad</h3>
+        <pre class="cron-preview" id="cron-preview"></pre>
+        <div class="config-actions">
+          <button id="add-schedule" type="submit">Lägg till schemaläggning</button>
+          <button id="cancel-edit" type="button" hidden>Avbryt ändring</button>
+        </div>
+      </form>
+    </section>
+    <footer>Schemaläggningen hanteras via nodagenten. Tiderna följer nodens lokala tid.</footer>
+  </main>
+  <script src="/assets/sidebar.js"></script>
+  <script src="/assets/schedules.js"></script>
+</body>
+</html>
