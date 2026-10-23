@@ -16,23 +16,22 @@
         <p id="node-callsign" class="muted">Lokal SvxLink-status från nodagenten</p>
       </div>
       <div class="header-actions">
+        <span class="status-icons">
+          <span id="online" class="status-dot offline" role="img" aria-label="Nodanslutning: okänd" title="Nodanslutning: okänd"></span>
+          <span id="service" class="status-dot offline" role="img" aria-label="SvxLink-tjänst: okänd" title="SvxLink-tjänst: okänd"></span>
+        </span>
         <div id="updated" class="muted" role="status" aria-live="polite">Ansluter…</div>
         <a id="schedules-link" class="button-link" href="#">Schemaläggning</a>
         <a id="config-link" class="button-link" href="#" aria-label="Redigera nodkonfiguration">Konfiguration</a>
       </div>
     </header>
-    <section class="summary" aria-label="Aktuell nodstatus">
-      <article><span>NODANSLUTNING</span><strong id="online">—</strong></article>
-      <article><span>SVXLINK-TJÄNST</span><strong id="service">—</strong></article>
-      <article><span>RADIO</span><strong id="radio">—</strong></article>
-      <article><span>TALGRUPP</span><strong id="talkgroup">—</strong></article>
-    </section>
     <section class="panel compact">
       <div class="panel-heading">
         <div><h2>Radiostatus</h2></div>
         <span class="muted">Direktström från STATE_PTY · <span id="live-state">Ansluter…</span></span>
       </div>
       <div class="node-details compact">
+        <div class="detail-card"><span>Aktiv talgrupp</span><strong id="talkgroup">Okänd</strong></div>
         <div class="detail-card"><span>Signalstyrka</span><strong id="signal-level">Okänd</strong></div>
         <div class="detail-card"><span>SvxLink-logik</span><strong id="logic">Okänd</strong></div>
         <div class="detail-card"><span>Senaste talare</span><strong id="tg-event">Okänd</strong></div>

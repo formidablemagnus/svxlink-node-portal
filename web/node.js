@@ -26,7 +26,6 @@ function updateServiceControls() {
 function renderRadio(radio) {
   const mode = radioNames[radio.mode] || 'Okänd';
   const signal = Number.isInteger(radio.signal_level) ? `${radio.signal_level}%` : 'Okänd';
-  setText('radio', mode);
   setText('signal-level', signal);
   const devices = document.getElementById('radio-devices');
   devices.replaceChildren();
@@ -201,8 +200,14 @@ function renderNode(node) {
   const lastSeen = node.last_seen ? new Date(node.last_seen).toLocaleString('sv-SE') : 'Aldrig';
   setText('node-name', node.name);
   setText('node-callsign', status.callsign || 'Lokal SvxLink-status från nodagenten');
-  setText('online', node.online ? 'Online' : 'Offline');
-  setText('service', status.service_status || 'Okänd');
+  const setDot = (id, ok, label) => {
+    const el = document.getElementById(id);
+    el.className = `status-dot ${ok ? 'online' : 'offline'}`;
+    el.title = label;
+    el.setAttribute('aria-label', label);
+  };
+  setDot('online', node.online, `Nodanslutning: ${node.online ? 'online' : 'offline'}`);
+  setDot('service', status.active === true, `SvxLink-tjänst: ${status.active === true ? 'igång' : (status.service_status || 'avstängd/okänd')}`);
   if (Date.now() - liveRadioAt > 5000) renderRadio(radio);
   setText('talkgroup', status.current_tg ? `TG ${status.current_tg}` : 'Okänd');
   currentTg = status.current_tg ? String(status.current_tg) : '';
@@ -222,7 +227,6 @@ function renderNode(node) {
   allLogs = Array.isArray(status.logs) ? status.logs : [];
   renderNodeInfo(status.node_info);
   renderLogs();
-  document.getElementById('online').className = node.online ? 'online' : 'offline';
   dtmfButton.disabled = !node.online || dtmfSending;
   setPresetsDisabled(!node.online || dtmfSending);
   document.getElementById('error').textContent = node.online
