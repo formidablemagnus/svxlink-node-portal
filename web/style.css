@@ -75,6 +75,11 @@ td a:hover { color: var(--blue); text-decoration: underline; }
 .detail-meta dd { margin: 3px 0 0; overflow-wrap: anywhere; }
 .log-lines { max-height: 560px; overflow: auto; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 7px; background: #151515; }
 .log-lines li { padding: 7px 10px; border-bottom: 1px solid #292929; color: #ddd; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; white-space: pre-wrap; }
+.station { margin-top: 16px; padding: 14px 16px; border: 1px solid var(--line); border-left: 3px solid var(--blue); border-radius: 7px; background: #181818; }
+.station .station-title { margin: 0 0 8px; font-size: 15px; color: var(--text); text-transform: uppercase; letter-spacing: .06em; }
+.station-sub { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
+.station-sub h4 { margin: 0 0 8px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+.device-card { margin: 0 0 8px; padding: 10px 12px; border: 1px solid #2c2c2c; border-radius: 6px; background: #151515; }
 .log-filter { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; margin-bottom: 10px; }
 .log-filter input[type="search"], .log-filter select, .admin-form input, .admin-form select { padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #151515; color: var(--text); font: inherit; }
 .log-filter input[type="search"] { flex: 1; min-width: 180px; }

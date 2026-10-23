@@ -136,8 +136,9 @@ function appendMeta(list, label, value) {
 
 function deviceSection(title, devices, transmitter) {
   const section = document.createElement('div');
-  const heading = document.createElement('h3');
-  heading.textContent = title;
+  section.className = 'station-sub';
+  const heading = document.createElement('h4');
+  heading.textContent = `${title} (${Array.isArray(devices) ? devices.length : 0})`;
   section.append(heading);
   if (!Array.isArray(devices) || !devices.length) {
     const none = document.createElement('p');
@@ -148,7 +149,7 @@ function deviceSection(title, devices, transmitter) {
   }
   for (const device of devices) {
     const list = document.createElement('dl');
-    list.className = 'detail-meta';
+    list.className = 'detail-meta device-card';
     appendMeta(list, 'Namn', infoValue(device.name ? `${device.name} (${device.id})` : device.id));
     appendMeta(list, 'Frekvens', infoValue(device.freq, 'MHz'));
     if (transmitter) appendMeta(list, 'Effekt', infoValue(device.pwr, 'W'));
@@ -178,8 +179,10 @@ function renderNodeInfo(info) {
   const container = document.getElementById('node-info-qth');
   container.replaceChildren();
   for (const qth of info.qth || []) {
-    const block = document.createElement('div');
+    const block = document.createElement('section');
+    block.className = 'station';
     const heading = document.createElement('h3');
+    heading.className = 'station-title';
     heading.textContent = `Station: ${qth.name || 'Namnlös'}`;
     const position = document.createElement('dl');
     position.className = 'detail-meta';
