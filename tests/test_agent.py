@@ -1,4 +1,5 @@
 import json
+import os
 import stat
 import tempfile
 import unittest
@@ -227,8 +228,34 @@ class AgentStatusTests(unittest.TestCase):
 
         self.assertEqual(result, {"ok": True})
         self.assertEqual(open_path.call_args.args[0], "/run/svxlink/control")
+        self.assertEqual(
+            open_path.call_args.args[1] & getattr(os, "O_NOFOLLOW", 0), 0
+        )
         self.assertEqual(write.call_args.args, (17, b"*123#"))
         close.assert_called_once_with(17)
+
+    def test_rejects_non_terminal_character_device(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "svxlink.conf"
+            config.write_text(
+                "[GLOBAL]\nLOGICS=RepeaterLogic\n"
+                "[RepeaterLogic]\nDTMF_CTRL_PTY=/dev/null\n",
+                encoding="utf-8",
+            )
+            command = {"id": "a" * 32, "action": "dtmf", "sequence": "*123#"}
+            with patch("agent.agent.os.open", return_value=17):
+                with patch(
+                    "agent.agent.os.fstat",
+                    return_value=SimpleNamespace(st_mode=stat.S_IFCHR),
+                ):
+                    with patch("agent.agent.os.isatty", return_value=False):
+                        with patch("agent.agent.os.write") as write:
+                            with patch("agent.agent.os.close"):
+                                result = execute_dtmf_command(command, config)
+
+        self.assertFalse(result["ok"])
+        self.assertIn("inte en PTY", result["error"])
+        write.assert_not_called()
 
     def test_rejects_invalid_dtmf_command_without_opening_path(self):
         command = {"id": "a" * 32, "action": "dtmf", "sequence": "12;reboot"}

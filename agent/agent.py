@@ -249,10 +249,11 @@ def execute_dtmf_command(command, config_path):
             flags = (
                 os.O_WRONLY
                 | getattr(os, "O_NONBLOCK", 0)
-                | getattr(os, "O_NOFOLLOW", 0)
             )
             descriptor = os.open(path, flags)
             mode = os.fstat(descriptor).st_mode
+            if stat.S_ISCHR(mode) and not os.isatty(descriptor):
+                raise ValueError(f"DTMF_CTRL_PTY är inte en PTY: {path}")
             if not (stat.S_ISCHR(mode) or stat.S_ISFIFO(mode)):
                 raise ValueError(f"DTMF_CTRL_PTY är inte en PTY eller FIFO: {path}")
             written = os.write(descriptor, sequence.encode("ascii"))
