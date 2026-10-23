@@ -142,7 +142,31 @@ class PortalStatusTests(unittest.TestCase):
                 )
                 with urlopen(page_request, timeout=2) as response:
                     self.assertEqual(response.status, 200)
-                    self.assertIn("Radiostatus", response.read().decode("utf-8"))
+                    detail_page = response.read().decode("utf-8")
+                self.assertIn("Radiostatus", detail_page)
+                self.assertIn("/config`", detail_page)
+                self.assertNotIn("editor-svxlink", detail_page)
+
+                dashboard_page_request = Request(
+                    f"{base_url}/",
+                    headers={"Authorization": f"Basic {credentials}"},
+                )
+                with urlopen(dashboard_page_request, timeout=2) as response:
+                    dashboard_page = response.read().decode("utf-8")
+                self.assertIn("/config\" aria-label=\"Redigera konfiguration för", dashboard_page)
+                self.assertIn("title=\"Redigera konfiguration\"", dashboard_page)
+
+                config_page_request = Request(
+                    f"{base_url}/nodes/{node['node_id']}/config",
+                    headers={"Authorization": f"Basic {credentials}"},
+                )
+                with urlopen(config_page_request, timeout=2) as response:
+                    self.assertEqual(response.status, 200)
+                    config_page = response.read().decode("utf-8")
+                self.assertIn("Läser filen från noden", config_page)
+                self.assertIn("readConfig('svxlink.conf', false)", config_page)
+                self.assertIn("readConfig('node_info.json', false)", config_page)
+                self.assertIn("editor-svxlink", config_page)
 
                 read_command_request = Request(
                     f"{base_url}/api/nodes/{node['node_id']}/config-commands",

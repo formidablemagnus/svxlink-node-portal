@@ -510,11 +510,21 @@ class PortalHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         elif path.startswith("/nodes/"):
-            node_id = path[len("/nodes/"):]
-            if not node_id or "/" in node_id or node_by_id(node_id) is None:
+            node_path = path[len("/nodes/"):]
+            path_parts = node_path.split("/")
+            if len(path_parts) == 1:
+                node_id = path_parts[0]
+                page = "node.html"
+            elif len(path_parts) == 2 and path_parts[1] == "config":
+                node_id = path_parts[0]
+                page = "config.html"
+            else:
+                self.send_json(404, {"error": "Sidan hittades inte."})
+                return
+            if not node_id or node_by_id(node_id) is None:
                 self.send_json(404, {"error": "Noden hittades inte."})
                 return
-            body = (WEB_ROOT / "node.html").read_bytes()
+            body = (WEB_ROOT / page).read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))

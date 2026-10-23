@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nodkonfiguration – SvxLink Portal</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/">SvxLink <span>PORTAL</span></a>
+    <nav aria-label="Huvudmeny">
+      <a href="/">Dashboard</a>
+      <div class="nav-heading">NODER</div>
+      <div id="node-nav" class="node-nav">Läser noder…</div>
+    </nav>
+    <div class="sidebar-footer">Central nodöversikt</div>
+  </aside>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">NODKONFIGURATION</p>
+        <h1 id="node-name">Hämtar nod…</h1>
+        <p class="muted">Redigera konfigurationsfiler på noden</p>
+      </div>
+      <a id="detail-link" class="button-link" href="#">Tillbaka till noddetaljer</a>
+    </header>
+    <section class="panel">
+      <div class="panel-heading">
+        <div>
+          <h2>Konfigurationsfiler</h2>
+          <p class="muted">Filerna läses automatiskt från noden när sidan öppnas.</p>
+        </div>
+      </div>
+      <section class="config-editor" aria-labelledby="svxlink-config-title">
+        <div class="config-editor-heading">
+          <h3 id="svxlink-config-title">/etc/svxlink/svxlink.conf</h3>
+          <div class="config-actions">
+            <button type="button" data-load="svxlink.conf">Läs om från nod</button>
+            <button type="button" data-save="svxlink.conf" disabled>Spara ändringar</button>
+          </div>
+        </div>
+        <textarea id="editor-svxlink" rows="18" spellcheck="false" aria-label="SvxLink-konfiguration" disabled></textarea>
+        <p id="status-svxlink" class="editor-status muted" role="status" aria-live="polite">Läser filen från noden…</p>
+      </section>
+      <section class="config-editor" aria-labelledby="node-info-title">
+        <div class="config-editor-heading">
+          <h3 id="node-info-title">/etc/svxlink/node_info.json</h3>
+          <div class="config-actions">
+            <button type="button" data-load="node_info.json">Läs om från nod</button>
+            <button type="button" data-save="node_info.json" disabled>Spara ändringar</button>
+          </div>
+        </div>
+        <textarea id="editor-node-info" rows="12" spellcheck="false" aria-label="Nodinformation JSON" disabled></textarea>
+        <p id="status-node-info" class="editor-status muted" role="status" aria-live="polite">Läser filen från noden…</p>
+      </section>
+      <p class="muted">Sparning kräver att noden är online. Ändringar i node_info.json måste vara giltig JSON. En säkerhetskopia skapas vid sparning. SvxLink startas inte om automatiskt.</p>
+    </section>
+    <footer>Nodkonfigurationen hanteras via nodagenten.</footer>
+  </main>
+  <script>
+    const pathParts = window.location.pathname.split('/').filter(Boolean);
+    const nodeId = pathParts[pathParts.length - 2];
+    const setText = (id, value) => { document.getElementById(id).textContent = value; };
+    const configHashes = {};
+    const loadedContents = {};
+    const configNames = {
+      'svxlink.conf': 'editor-svxlink',
+      'node_info.json': 'editor-node-info'
+    };
+    document.getElementById('detail-link').href = `/nodes/${encodeURIComponent(nodeId)}`;
+
+    function configStatus(documentName, message, isError = false) {
+      const element = document.getElementById(
+        documentName === 'svxlink.conf' ? 'status-svxlink' : 'status-node-info'
+      );
+      element.textContent = message;
+      element.className = `editor-status${isError ? ' error' : ' muted'}`;
+    }
+
+    async function enqueueConfigCommand(command) {
+      const response = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}/config-commands`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(command)
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      for (let attempt = 0; attempt < 300; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const resultResponse = await fetch(`/api/config-commands/${encodeURIComponent(data.command_id)}`, {
+          cache: 'no-store'
+        });
+        const result = await resultResponse.json();
+        if (resultResponse.status === 404) throw new Error(result.error || 'Åtgärden hittades inte.');
+        if (!resultResponse.ok) throw new Error(result.error || `HTTP ${resultResponse.status}`);
+        if (result.status === 'expired') throw new Error('Noden hann inte behandla begäran. Kontrollera att agenten kör.');
+        if (result.status === 'completed') return result.result;
+        if (result.status === 'failed') throw new Error(result.result.error || 'Åtgärden misslyckades.');
+      }
+      throw new Error('Begäran tog för lång tid. Kontrollera nodens agentlogg.');
+    }
+
+    async function readConfig(documentName, confirmOverwrite = true) {
+      const editor = document.getElementById(configNames[documentName]);
+      if (
+        confirmOverwrite
+        && !editor.disabled
+        && editor.value !== loadedContents[documentName]
+        && !window.confirm(`Läs om ${documentName} och kasta lokala ändringar?`)
+      ) return;
+      const buttons = document.querySelectorAll(`[data-load="${documentName}"], [data-save="${documentName}"]`);
+      buttons.forEach((button) => { button.disabled = true; });
+      configStatus(documentName, 'Hämtar filen från noden…');
+      try {
+        const result = await enqueueConfigCommand({action: 'read', document: documentName});
+        editor.value = result.content;
+        editor.disabled = false;
+        configHashes[documentName] = result.sha256;
+        loadedContents[documentName] = result.content;
+        document.querySelector(`[data-save="${documentName}"]`).disabled = false;
+        configStatus(documentName, 'Filen är inläst. Ändringar sparas först efter att du bekräftat.');
+      } catch (error) {
+        configStatus(documentName, error.message, true);
+      } finally {
+        document.querySelector(`[data-load="${documentName}"]`).disabled = false;
+      }
+    }
+
+    async function saveConfig(documentName) {
+      const editor = document.getElementById(configNames[documentName]);
+      if (!configHashes[documentName]) {
+        configStatus(documentName, 'Läs in filen från noden innan du sparar.', true);
+        return;
+      }
+      if (documentName === 'node_info.json') {
+        try {
+          JSON.parse(editor.value);
+        } catch (error) {
+          configStatus(documentName, `Ogiltig JSON: ${error.message}`, true);
+          return;
+        }
+      }
+      if (!window.confirm(`Spara ändringarna till ${documentName} på noden? En säkerhetskopia skapas.`)) return;
+      const buttons = document.querySelectorAll(`[data-load="${documentName}"], [data-save="${documentName}"]`);
+      buttons.forEach((button) => { button.disabled = true; });
+      configStatus(documentName, 'Sparar filen på noden…');
+      try {
+        const result = await enqueueConfigCommand({
+          action: 'write',
+          document: documentName,
+          content: editor.value,
+          sha256: configHashes[documentName]
+        });
+        configHashes[documentName] = result.sha256;
+        loadedContents[documentName] = editor.value;
+        configStatus(documentName, `Sparad. Säkerhetskopia: ${result.backup}`);
+      } catch (error) {
+        configStatus(documentName, error.message, true);
+      } finally {
+        buttons.forEach((button) => { button.disabled = false; });
+      }
+    }
+
+    async function loadNode() {
+      try {
+        const response = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}`, {cache: 'no-store'});
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        setText('node-name', data.node.name);
+      } catch (error) {
+        setText('node-name', `Kunde inte läsa nodnamn: ${error.message}`);
+      }
+    }
+
+    async function loadNodeNavigation() {
+      try {
+        const response = await fetch('/api/nodes', {cache: 'no-store'});
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        const nav = document.getElementById('node-nav');
+        nav.replaceChildren();
+        for (const node of data.nodes) {
+          const link = document.createElement('a');
+          link.className = 'nav-node';
+          link.href = `/nodes/${encodeURIComponent(node.id)}`;
+          link.textContent = node.name;
+          nav.append(link);
+        }
+        if (!data.nodes.length) nav.textContent = 'Inga registrerade noder';
+      } catch (error) {
+        document.querySelector('footer').textContent = `Kunde inte läsa nodlistan: ${error.message}`;
+      }
+    }
+
+    document.querySelectorAll('[data-load]').forEach((button) => {
+      button.addEventListener('click', () => readConfig(button.dataset.load));
+    });
+    document.querySelectorAll('[data-save]').forEach((button) => {
+      button.addEventListener('click', () => saveConfig(button.dataset.save));
+    });
+    loadNode();
+    loadNodeNavigation();
+    readConfig('svxlink.conf', false);
+    readConfig('node_info.json', false);
+  </script>
+</body>
+</html>

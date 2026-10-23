@@ -103,9 +103,11 @@ its settings.
 
 ### Edit node configuration
 
-The node detail page lets portal administrators read and edit
+The node detail page links to a separate configuration page. Portal
+administrators can read and edit
 `/etc/svxlink/svxlink.conf` and `/etc/svxlink/node_info.json`. The node must be
-online to process an edit request. Each save creates a timestamped backup
+online to read or process an edit request. Both files are loaded automatically
+when the configuration page opens. Each save creates a timestamped backup
 beside the original file and preserves its owner and mode. A checksum check
 prevents saving if the file changed after it was loaded; reload it and reapply
 your edits in that case. `node_info.json` must remain valid JSON. Saving does
