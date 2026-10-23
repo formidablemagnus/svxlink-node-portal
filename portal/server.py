@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from portal.reflector import REFLECTOR_HUB
 from portal.version import read_version
@@ -36,6 +36,12 @@ MAX_COMMAND_RESULT_BYTES = MAX_CONFIG_BYTES * 6 + 65536
 MAX_DTMF_SEQUENCE_LENGTH = 64
 MAX_DTMF_NODES = 100
 MAX_DTMF_BUTTONS = 30
+MAX_AUDIT_ROWS = 5000
+AUDIT_PAGE_SIZE = 200
+USER_ROLES = ("admin", "operator")
+USERNAME_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,40}")
+MIN_USER_PASSWORD_LENGTH = 12
+PASSWORD_ITERATIONS = 200_000
 MAX_SCHEDULES = 100
 AGENT_COMMAND_TTL_SECONDS = 300
 ONLINE_WINDOW_SECONDS = 30
@@ -50,6 +56,7 @@ STATIC_ASSETS = {
     "config.js": JS,
     "schedules.js": JS,
     "dtmf.js": JS,
+    "admin.js": JS,
 }
 VALID_RADIO_MODES = {"tx", "rx", "idle", "unknown"}
 MAX_RADIO_EVENTS_PER_REQUEST = 100
@@ -150,6 +157,30 @@ def connect_database():
             label TEXT NOT NULL,
             sequence TEXT NOT NULL
         )"""
+    )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS portal_users (
+            username TEXT PRIMARY KEY,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )"""
+    )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            action TEXT NOT NULL,
+            node_id TEXT,
+            node_name TEXT,
+            detail TEXT,
+            outcome TEXT NOT NULL,
+            command_id TEXT
+        )"""
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS audit_log_command ON audit_log (command_id)"
     )
     connection.execute(
         "CREATE INDEX IF NOT EXISTS agent_commands_node_status "
@@ -547,7 +578,174 @@ def reject_json_constant(value):
     raise ValueError(f"Ogiltigt JSON-konstantvärde: {value}.")
 
 
-def enqueue_agent_command(node_id, payload):
+def command_audit_summary(command):
+    action = command["action"]
+    if action == "dtmf":
+        return "dtmf", command["sequence"]
+    if action == "service":
+        return "service", command["operation"]
+    if action == "schedules":
+        return "schedules", command["operation"]
+    return f"config.{action}", command["document"]
+
+
+def record_audit(connection, actor, action, detail="", node_id=None, node_name=None,
+                 outcome="ok", command_id=None):
+    connection.execute(
+        "INSERT INTO audit_log (created_at, actor, action, node_id, node_name, detail, "
+        "outcome, command_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (datetime.now(timezone.utc).isoformat(), actor, action, node_id, node_name,
+         detail[:200], outcome, command_id),
+    )
+    connection.execute(
+        "DELETE FROM audit_log WHERE id <= "
+        "(SELECT MAX(id) FROM audit_log) - ?",
+        (MAX_AUDIT_ROWS,),
+    )
+
+
+def list_audit(limit=AUDIT_PAGE_SIZE, node_id=None):
+    expired_before = (
+        datetime.now(timezone.utc) - timedelta(seconds=AGENT_COMMAND_TTL_SECONDS + 60)
+    ).isoformat()
+    query = (
+        "SELECT created_at, actor, action, node_id, node_name, detail, outcome "
+        "FROM audit_log"
+    )
+    params = []
+    if node_id:
+        query += " WHERE node_id = ?"
+        params.append(node_id)
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    with database() as connection:
+        rows = connection.execute(query, params).fetchall()
+    entries = []
+    for row in rows:
+        entry = dict(row)
+        if entry["outcome"] == "queued" and entry["created_at"] < expired_before:
+            entry["outcome"] = "expired"
+        entries.append(entry)
+    return entries
+
+
+def hash_password(password):
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, PASSWORD_ITERATIONS
+    )
+    return f"pbkdf2_sha256${PASSWORD_ITERATIONS}${salt.hex()}${digest.hex()}"
+
+
+def verify_password(password, stored):
+    try:
+        scheme, iterations, salt, digest = stored.split("$")
+        if scheme != "pbkdf2_sha256":
+            return False
+        candidate = hashlib.pbkdf2_hmac(
+            "sha256", password.encode("utf-8"), bytes.fromhex(salt), int(iterations)
+        )
+        return hmac.compare_digest(candidate.hex(), digest)
+    except ValueError:
+        return False
+
+
+def validate_user_fields(username, password, role):
+    if not isinstance(username, str) or not USERNAME_PATTERN.fullmatch(username):
+        raise ValueError("Användarnamnet måste vara 1–40 tecken: A–Z, 0–9, punkt, understreck eller bindestreck.")
+    if not isinstance(password, str) or not (
+        MIN_USER_PASSWORD_LENGTH <= len(password) <= 200
+    ):
+        raise ValueError(
+            f"Lösenordet måste innehålla {MIN_USER_PASSWORD_LENGTH}–200 tecken."
+        )
+    if role not in USER_ROLES:
+        raise ValueError("Rollen måste vara admin eller operator.")
+
+
+def list_users():
+    users = [{"username": admin_credentials()[0], "role": "admin", "builtin": True}]
+    with database() as connection:
+        rows = connection.execute(
+            "SELECT username, role, created_at FROM portal_users ORDER BY username"
+        ).fetchall()
+    users.extend({**dict(row), "builtin": False} for row in rows)
+    return users
+
+
+def create_user(actor, username, password, role):
+    validate_user_fields(username, password, role)
+    if username == admin_credentials()[0]:
+        raise ValueError("Användarnamnet är reserverat för huvudadministratören.")
+    with database() as connection:
+        try:
+            connection.execute(
+                "INSERT INTO portal_users (username, password_hash, role, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (username, hash_password(password), role,
+                 datetime.now(timezone.utc).isoformat()),
+            )
+        except sqlite3.IntegrityError:
+            raise ValueError("Användaren finns redan.") from None
+        record_audit(connection, actor, "user.create", f"{username} ({role})")
+
+
+def update_user(actor, username, password=None, role=None):
+    with database() as connection:
+        row = connection.execute(
+            "SELECT role FROM portal_users WHERE username = ?", (username,)
+        ).fetchone()
+        if row is None:
+            return False
+        new_role = role if role is not None else row["role"]
+        if password is None:
+            password_hash = None
+            validate_user_fields(username, "x" * MIN_USER_PASSWORD_LENGTH, new_role)
+        else:
+            validate_user_fields(username, password, new_role)
+            password_hash = hash_password(password)
+        if password_hash:
+            connection.execute(
+                "UPDATE portal_users SET password_hash = ?, role = ? WHERE username = ?",
+                (password_hash, new_role, username),
+            )
+        else:
+            connection.execute(
+                "UPDATE portal_users SET role = ? WHERE username = ?", (new_role, username)
+            )
+        record_audit(connection, actor, "user.update", f"{username} ({new_role})")
+    return True
+
+
+def delete_user(actor, username):
+    with database() as connection:
+        cursor = connection.execute(
+            "DELETE FROM portal_users WHERE username = ?", (username,)
+        )
+        if cursor.rowcount != 1:
+            return False
+        record_audit(connection, actor, "user.delete", username)
+    return True
+
+
+def authenticate_user(username, password):
+    """Return the role for valid credentials, otherwise None."""
+    expected_user, expected_password = admin_credentials()
+    user_ok = hmac.compare_digest(username, expected_user)
+    password_ok = hmac.compare_digest(password, expected_password)
+    if user_ok and password_ok:
+        return "admin"
+    with database() as connection:
+        row = connection.execute(
+            "SELECT password_hash, role FROM portal_users WHERE username = ?",
+            (username,),
+        ).fetchone()
+    if row is not None and verify_password(password, row["password_hash"]):
+        return row["role"]
+    return None
+
+
+def enqueue_agent_command(node_id, payload, actor="system"):
     command = validate_agent_command(payload)
     now = datetime.now(timezone.utc)
     created_at = now.isoformat()
@@ -584,6 +782,12 @@ def enqueue_agent_command(node_id, payload):
                 VALUES (?, ?, ?, 'pending', ?, ?)""",
             (command_id, node_id, json.dumps(command, ensure_ascii=False), created_at, created_at),
         )
+        node_name = connection.execute(
+            "SELECT name FROM nodes WHERE id = ?", (node_id,)
+        ).fetchone()["name"]
+        audit_action, audit_detail = command_audit_summary(command)
+        record_audit(connection, actor, audit_action, audit_detail, node_id, node_name,
+                     "queued", command_id)
     return command_id
 
 
@@ -699,17 +903,23 @@ def complete_agent_command(node_id, command_id, result):
     if len(encoded_result) > MAX_COMMAND_RESULT_BYTES:
         raise ValueError("Resultatet är större än tillåtet.")
     with database() as connection:
+        outcome = "completed" if result["ok"] else "failed"
         cursor = connection.execute(
             """UPDATE agent_commands SET status = ?, result_json = ?, updated_at = ?
                 WHERE id = ? AND node_id = ? AND status = 'in_progress'""",
             (
-                "completed" if result["ok"] else "failed",
+                outcome,
                 result_json,
                 datetime.now(timezone.utc).isoformat(),
                 command_id,
                 node_id,
             ),
         )
+        if cursor.rowcount == 1:
+            connection.execute(
+                "UPDATE audit_log SET outcome = ? WHERE command_id = ?",
+                (outcome, command_id),
+            )
     return cursor.rowcount == 1
 
 
@@ -780,7 +990,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             ).fetchone()
         return node["id"] if node else None
 
-    def require_admin(self):
+    def require_admin(self, admin_only=False):
         header = self.headers.get("Authorization", "")
         try:
             scheme, encoded = header.split(" ", 1)
@@ -790,16 +1000,19 @@ class PortalHandler(BaseHTTPRequestHandler):
             username, password = decoded.split(":", 1)
         except (ValueError, UnicodeError):
             username, password = "", ""
-        expected_user, expected_password = admin_credentials()
-        authorized = hmac.compare_digest(username, expected_user) and hmac.compare_digest(
-            password, expected_password
-        )
-        if not authorized:
+        role = authenticate_user(username, password)
+        if role is None:
             self.send_response(401)
             self.send_header("WWW-Authenticate", 'Basic realm="SvxLink Portal"')
             self.send_header("Content-Length", "0")
             self.end_headers()
-        return authorized
+            return False
+        self.actor = username
+        self.role = role
+        if admin_only and role != "admin":
+            self.send_json(403, {"error": "Kräver administratörsbehörighet."})
+            return False
+        return True
 
     def do_GET(self):
         path = urlparse(self.path).path
@@ -865,6 +1078,26 @@ class PortalHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             self.wfile.write(body)
+        elif path == "/admin":
+            if not self.require_admin(admin_only=True):
+                return
+            body = (WEB_ROOT / "admin.html").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/api/me":
+            self.send_json(200, {"username": self.actor, "role": self.role})
+        elif path == "/api/users":
+            if self.require_admin(admin_only=True):
+                self.send_json(200, {"users": list_users()})
+        elif path == "/api/audit":
+            if self.require_admin(admin_only=True):
+                query = parse_qs(urlparse(self.path).query)
+                node_id = query.get("node_id", [""])[0]
+                self.send_json(200, {"entries": list_audit(node_id=node_id or None)})
         elif path == "/api/dtmf-buttons":
             self.send_json(200, {"buttons": list_dtmf_buttons()})
         elif path == "/api/reflector-events":
@@ -980,6 +1213,19 @@ class PortalHandler(BaseHTTPRequestHandler):
         finally:
             RADIO_HUB.unsubscribe(node_id)
 
+    def do_DELETE(self):
+        path = urlparse(self.path).path
+        if not path.startswith("/api/users/"):
+            self.send_json(404, {"error": "Sidan hittades inte."})
+            return
+        if not self.require_admin(admin_only=True):
+            return
+        username = unquote(path[len("/api/users/"):])
+        if not delete_user(self.actor, username):
+            self.send_json(404, {"error": "Användaren hittades inte."})
+        else:
+            self.send_json(200, {"users": list_users()})
+
     def do_POST(self):
         path = urlparse(self.path).path
         if path == "/api/nodes":
@@ -994,10 +1240,49 @@ class PortalHandler(BaseHTTPRequestHandler):
                 ):
                     raise ValueError("Begäran måste innehålla nodnamnet som text.")
                 credentials = provision_node(payload["name"])
+                with database() as connection:
+                    record_audit(connection, self.actor, "node.create", credentials["name"],
+                                 credentials["node_id"], credentials["name"])
             except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
                 self.send_json(400, {"error": str(exc)})
                 return
             self.send_json(201, credentials)
+            return
+        if path == "/api/users":
+            if not self.require_admin(admin_only=True):
+                return
+            try:
+                payload = self.read_json_body(MAX_REQUEST_BYTES)
+                if not isinstance(payload, dict) or set(payload) != {"username", "password", "role"}:
+                    raise ValueError("Begäran måste innehålla användarnamn, lösenord och roll.")
+                create_user(self.actor, payload["username"], payload["password"], payload["role"])
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            self.send_json(201, {"users": list_users()})
+            return
+        if path.startswith("/api/users/"):
+            if not self.require_admin(admin_only=True):
+                return
+            username = unquote(path[len("/api/users/"):])
+            try:
+                payload = self.read_json_body(MAX_REQUEST_BYTES)
+                if (
+                    not isinstance(payload, dict)
+                    or not payload
+                    or not set(payload) <= {"password", "role"}
+                ):
+                    raise ValueError("Ange nytt lösenord och/eller ny roll.")
+                found = update_user(
+                    self.actor, username, payload.get("password"), payload.get("role")
+                )
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            if not found:
+                self.send_json(404, {"error": "Användaren hittades inte."})
+            else:
+                self.send_json(200, {"users": list_users()})
             return
         if path == "/api/dtmf-buttons":
             if not self.require_admin():
@@ -1055,7 +1340,7 @@ class PortalHandler(BaseHTTPRequestHandler):
                     )
                     continue
                 try:
-                    command_id = enqueue_agent_command(node_id, command)
+                    command_id = enqueue_agent_command(node_id, command, self.actor)
                 except (ValueError, RuntimeError) as exc:
                     results.append(
                         {
@@ -1089,7 +1374,7 @@ class PortalHandler(BaseHTTPRequestHandler):
                 command = validate_dtmf_command(
                     {"action": "dtmf", "sequence": payload["sequence"]}
                 )
-                command_id = enqueue_agent_command(node_id, command)
+                command_id = enqueue_agent_command(node_id, command, self.actor)
             except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
                 self.send_json(400, {"error": str(exc)})
                 return
@@ -1113,7 +1398,7 @@ class PortalHandler(BaseHTTPRequestHandler):
                 command = validate_service_command(
                     {"action": "service", "operation": payload["operation"]}
                 )
-                command_id = enqueue_agent_command(node_id, command)
+                command_id = enqueue_agent_command(node_id, command, self.actor)
             except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
                 self.send_json(400, {"error": str(exc)})
                 return
@@ -1132,7 +1417,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             node_id = path[len("/api/nodes/"):-len("/config-commands")].rstrip("/")
             try:
                 payload = self.read_json_body(MAX_COMMAND_REQUEST_BYTES)
-                command_id = enqueue_agent_command(node_id, payload)
+                command_id = enqueue_agent_command(node_id, payload, self.actor)
             except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
                 self.send_json(400, {"error": str(exc)})
                 return

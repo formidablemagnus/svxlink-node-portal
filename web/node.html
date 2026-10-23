@@ -93,6 +93,18 @@
         <div><h2>SvxLink-logg</h2><p class="muted">Senaste loggraderna visas överst.</p></div>
         <span id="log-count" class="pill">0 rader</span>
       </div>
+      <div class="log-filter">
+        <input id="log-search" type="search" placeholder="Sök i loggen…" aria-label="Sök i loggen" autocomplete="off">
+        <select id="log-level" aria-label="Filtrera på loggnivå">
+          <option value="">Alla nivåer</option>
+          <option value="error">Fel</option>
+          <option value="warning">Varningar</option>
+          <option value="info">Övrigt</option>
+        </select>
+        <label class="log-regex"><input id="log-regex" type="checkbox"> Regex</label>
+        <button id="log-clear" type="button">Rensa</button>
+      </div>
+      <p id="log-filter-error" class="error" role="status" aria-live="polite"></p>
       <ol id="log-lines" class="log-lines">
         <li class="muted">Väntar på loggrapport…</li>
       </ol>

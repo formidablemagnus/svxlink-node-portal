@@ -75,6 +75,15 @@ td a:hover { color: var(--blue); text-decoration: underline; }
 .detail-meta dd { margin: 3px 0 0; overflow-wrap: anywhere; }
 .log-lines { max-height: 560px; overflow: auto; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 7px; background: #151515; }
 .log-lines li { padding: 7px 10px; border-bottom: 1px solid #292929; color: #ddd; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; white-space: pre-wrap; }
+.log-filter { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; margin-bottom: 10px; }
+.log-filter input[type="search"], .log-filter select, .admin-form input, .admin-form select { padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #151515; color: var(--text); font: inherit; }
+.log-filter input[type="search"] { flex: 1; min-width: 180px; }
+.log-regex { color: var(--muted); font-size: 13px; }
+#log-filter-error:empty { display: none; }
+.admin-form { display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 14px; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table th, .data-table td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; overflow-wrap: anywhere; }
+.data-table th { color: var(--muted); font-weight: 600; }
 .log-lines li:last-child { border-bottom: 0; }
 .log-lines li.muted { color: var(--muted); font-family: inherit; }
 .config-editor { margin-top: 20px; }

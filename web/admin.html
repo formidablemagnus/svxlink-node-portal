@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Användare och granskning – SvxLink Portal</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <aside class="sidebar" id="sidebar" data-active="admin"></aside>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">ADMINISTRATION</p>
+        <h1>Användare och granskning</h1>
+        <p class="muted">Hantera portalanvändare och granska skickade kommandon.</p>
+      </div>
+      <div id="updated" class="muted" role="status" aria-live="polite"></div>
+    </header>
+    <section class="panel">
+      <div class="panel-heading"><div><h2>Portalanvändare</h2>
+        <p class="muted">Administratörer kan hantera användare och granskningsloggen. Operatörer kan styra noder men inte administrera portalen. Huvudadministratören anges i <code>/etc/default/svxlink-node-portal</code> och kan inte ändras här.</p></div></div>
+      <form id="user-form" class="admin-form">
+        <input id="user-name" type="text" placeholder="Användarnamn" maxlength="40" pattern="[A-Za-z0-9._-]{1,40}" autocomplete="off" required aria-label="Användarnamn">
+        <input id="user-password" type="password" placeholder="Lösenord (minst 12 tecken)" minlength="12" maxlength="200" autocomplete="new-password" required aria-label="Lösenord">
+        <select id="user-role" aria-label="Roll">
+          <option value="operator">Operatör</option>
+          <option value="admin">Administratör</option>
+        </select>
+        <button type="submit">Lägg till användare</button>
+      </form>
+      <p id="user-status" class="editor-status" role="status" aria-live="polite"></p>
+      <table class="data-table">
+        <thead><tr><th>Användare</th><th>Roll</th><th>Skapad</th><th>Åtgärder</th></tr></thead>
+        <tbody id="user-rows"></tbody>
+      </table>
+    </section>
+    <section class="panel">
+      <div class="panel-heading"><div><h2>Granskningslogg</h2>
+        <p class="muted">Senaste händelser, nyast först. Loggen sparar de 5 000 senaste händelserna.</p></div></div>
+      <div class="log-filter">
+        <input id="audit-search" type="search" placeholder="Filtrera på användare, nod, åtgärd…" aria-label="Filtrera granskningsloggen" autocomplete="off">
+        <button id="audit-refresh" type="button">Uppdatera</button>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>Tid</th><th>Användare</th><th>Åtgärd</th><th>Nod</th><th>Detalj</th><th>Resultat</th></tr></thead>
+        <tbody id="audit-rows"></tbody>
+      </table>
+    </section>
+  </main>
+  <script src="/assets/sidebar.js"></script>
+  <script src="/assets/admin.js"></script>
+</body>
+</html>

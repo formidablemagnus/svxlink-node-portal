@@ -5,6 +5,7 @@ import os
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -531,7 +532,7 @@ class PortalServiceCommandTests(unittest.TestCase):
                 node_script = fetch_asset(
                     base_url, {"Authorization": f"Basic {credentials}"}, "node.js"
                 )
-                self.assertIn("logs.slice().reverse()", node_script)
+                self.assertIn("filtered.slice().reverse()", node_script)
                 self.assertIn("waitForServiceStatus(operation === 'start')", node_script)
                 self.assertIn("Du kan nu starta den.", node_script)
                 self.assertIn("Du kan nu stänga av den.", node_script)
@@ -770,6 +771,84 @@ class PortalDtmfTests(unittest.TestCase):
 
                 with urlopen(Request(url, headers=headers), timeout=2) as response:
                     self.assertEqual(len(json.loads(response.read())["buttons"]), 2)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+
+class PortalUserAndAuditTests(unittest.TestCase):
+    def test_users_roles_and_audit_log(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {
+                "PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3"),
+                "PORTAL_ADMIN_USER": "admin",
+                "PORTAL_ADMIN_PASSWORD": "this-is-a-long-test-password",
+            },
+        ):
+            server = ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f"http://127.0.0.1:{server.server_port}"
+
+                def call(user, password, path, body=None, method=None):
+                    token = base64.b64encode(f"{user}:{password}".encode()).decode()
+                    request = Request(
+                        base + path,
+                        data=json.dumps(body).encode() if body is not None else None,
+                        headers={"Authorization": f"Basic {token}",
+                                 "Content-Type": "application/json"},
+                        method=method,
+                    )
+                    with urlopen(request, timeout=2) as response:
+                        return json.loads(response.read())
+
+                def status(*args, **kwargs):
+                    with self.assertRaises(HTTPError) as error:
+                        call(*args, **kwargs)
+                    return error.exception.code
+
+                admin = ("admin", "this-is-a-long-test-password")
+                call(*admin, "/api/users", {
+                    "username": "olle", "password": "operator-password-1", "role": "operator",
+                })
+                self.assertEqual(status(*admin, "/api/users", {
+                    "username": "olle", "password": "operator-password-1", "role": "operator",
+                }), 400)
+                self.assertEqual(status(*admin, "/api/users", {
+                    "username": "kort", "password": "short", "role": "operator",
+                }), 400)
+                operator = ("olle", "operator-password-1")
+                self.assertEqual(call(*operator, "/api/me")["role"], "operator")
+                self.assertEqual(status(*operator, "/api/users"), 403)
+                self.assertEqual(status(*operator, "/api/audit"), 403)
+                self.assertEqual(status("olle", "wrong", "/api/me"), 401)
+
+                node = call(*operator, "/api/nodes", {"name": "Audit"})
+                with database() as connection:
+                    connection.execute(
+                        "UPDATE nodes SET last_seen = ? WHERE id = ?",
+                        (datetime.now(timezone.utc).isoformat(), node["node_id"]),
+                    )
+                queued = call(*operator, f"/api/nodes/{node['node_id']}/dtmf-commands",
+                              {"sequence": "91240#"})
+                claim_agent_commands(node["node_id"])
+                complete_agent_command(node["node_id"], queued["command_id"], {"ok": True})
+
+                entries = call(*admin, "/api/audit")["entries"]
+                dtmf = next(entry for entry in entries if entry["action"] == "dtmf")
+                self.assertEqual(
+                    (dtmf["actor"], dtmf["detail"], dtmf["outcome"]),
+                    ("olle", "91240#", "completed"),
+                )
+                self.assertTrue(any(entry["action"] == "user.create" for entry in entries))
+
+                call(*admin, "/api/users/olle", {"role": "admin"}, "POST")
+                self.assertEqual(call(*operator, "/api/me")["role"], "admin")
+                call(*admin, "/api/users/olle", method="DELETE")
+                self.assertEqual(status(*operator, "/api/me"), 401)
             finally:
                 server.shutdown()
                 server.server_close()

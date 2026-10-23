@@ -57,6 +57,67 @@ function startRadioStream() {
   radioSource.onerror = () => setText('live-state', 'Återansluter…');
 }
 
+let allLogs = [];
+const ERROR_RE = /\b(error|fatal|critical|\*{3})\b|\bfel\b/i;
+const WARNING_RE = /\b(warn(ing)?|varning)\b/i;
+
+function logLevel(line) {
+  if (ERROR_RE.test(line)) return 'error';
+  if (WARNING_RE.test(line)) return 'warning';
+  return 'info';
+}
+
+function renderLogs() {
+  const query = document.getElementById('log-search').value;
+  const level = document.getElementById('log-level').value;
+  const useRegex = document.getElementById('log-regex').checked;
+  const errorBox = document.getElementById('log-filter-error');
+  let matches = () => true;
+  errorBox.textContent = '';
+  if (query) {
+    if (useRegex) {
+      try {
+        const re = new RegExp(query, 'i');
+        matches = (line) => re.test(line);
+      } catch (error) {
+        errorBox.textContent = 'Ogiltigt reguljärt uttryck.';
+      }
+    } else {
+      const needle = query.toLowerCase();
+      matches = (line) => line.toLowerCase().includes(needle);
+    }
+  }
+  const filtered = allLogs.filter((line) => matches(line) && (!level || logLevel(line) === level));
+  const logList = document.getElementById('log-lines');
+  logList.replaceChildren();
+  if (filtered.length) {
+    for (const line of filtered.slice().reverse()) {
+      const item = document.createElement('li');
+      item.textContent = line;
+      logList.append(item);
+    }
+  } else {
+    const item = document.createElement('li');
+    item.className = 'muted';
+    item.textContent = allLogs.length ? 'Inga loggrader matchar filtret.' : 'Inga loggrader rapporterade.';
+    logList.append(item);
+  }
+  const filterActive = Boolean(query || level);
+  setText('log-count', filterActive
+    ? `${filtered.length} av ${allLogs.length} rader`
+    : `${allLogs.length} ${allLogs.length === 1 ? 'rad' : 'rader'}`);
+}
+
+for (const id of ['log-search', 'log-level', 'log-regex']) {
+  document.getElementById(id).addEventListener('input', renderLogs);
+}
+document.getElementById('log-clear').addEventListener('click', () => {
+  document.getElementById('log-search').value = '';
+  document.getElementById('log-level').value = '';
+  document.getElementById('log-regex').checked = false;
+  renderLogs();
+});
+
 function renderNode(node) {
   const status = node.status || {};
   const radio = status.radio || {};
@@ -81,22 +142,8 @@ function renderNode(node) {
   serviceActive = typeof status.active === 'boolean' ? status.active : null;
   if (serviceActive === serviceStatusExpected) serviceStatusExpected = null;
   updateServiceControls();
-  const logs = Array.isArray(status.logs) ? status.logs : [];
-  const logList = document.getElementById('log-lines');
-  logList.replaceChildren();
-  if (logs.length) {
-    for (const line of logs.slice().reverse()) {
-      const item = document.createElement('li');
-      item.textContent = line;
-      logList.append(item);
-    }
-  } else {
-    const item = document.createElement('li');
-    item.className = 'muted';
-    item.textContent = 'Inga loggrader rapporterade.';
-    logList.append(item);
-  }
-  setText('log-count', `${logs.length} ${logs.length === 1 ? 'rad' : 'rader'}`);
+  allLogs = Array.isArray(status.logs) ? status.logs : [];
+  renderLogs();
   document.getElementById('online').className = node.online ? 'online' : 'offline';
   dtmfButton.disabled = !node.online || dtmfSending;
   setPresetsDisabled(!node.online || dtmfSending);

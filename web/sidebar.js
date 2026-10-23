@@ -3,6 +3,7 @@
   const MENU = [
     {id: 'dashboard', label: 'Dashboard', href: '/'},
     {id: 'dtmf', label: 'DTMF-styrning', href: '/dtmf'},
+    {id: 'admin', label: 'Användare & granskning', href: '/admin'},
     {heading: 'NODER'},
     {nodes: true},
     {id: 'settings', label: 'Portalinställningar', href: '/#portal-settings'},

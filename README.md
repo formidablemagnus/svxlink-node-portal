@@ -113,6 +113,26 @@ installer grants the `svxlink` account sudo access only to the fixed
 configuration helper and `systemctl start/stop svxlink.service`; reinstall or
 update the agent role to install this rule.
 
+The log panel can be filtered by free-text search (optionally as a regular
+expression) and by level (errors, warnings, other). Filtering happens in the
+browser on the lines already reported by the node.
+
+### Portal users and command audit
+
+The administrator from `PORTAL_ADMIN_USER`/`PORTAL_ADMIN_PASSWORD` always
+exists and is the bootstrap `admin`. Under **Användare & granskning**
+(`/admin`) admins can add users (passwords of at least 12 characters, stored as
+salted PBKDF2-SHA256 hashes), change passwords and roles, and delete users.
+Role `operator` can control nodes (DTMF, service, configuration, schedules) but
+cannot manage users or read the audit log; role `admin` can do both.
+
+Every command sent to a node (DTMF sequence, service start/stop, configuration
+read/write, schedule read/write), node creation and user changes are recorded
+in the audit log with the acting user, time, node and outcome (queued,
+completed, failed, expired). Configuration contents are never logged, only the
+document name. The log keeps the latest 5000 entries; the DTMF sequences sent
+are stored in clear text.
+
 ### Edit node configuration
 
 The node detail page links to a separate configuration page. Portal
@@ -226,6 +246,4 @@ python3 -m unittest discover -s tests -v
 
 ## Roadmap
 
-1. Add filtering and search for log lines on node detail pages.
-2. Add command auditing and portal user management.
-3. Add documented compatibility checks and a guided reverse-proxy setup.
+1. Add documented compatibility checks and a guided reverse-proxy setup.
