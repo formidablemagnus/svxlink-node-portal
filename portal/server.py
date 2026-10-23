@@ -34,6 +34,16 @@ MAX_DTMF_BUTTONS = 30
 AGENT_COMMAND_TTL_SECONDS = 300
 ONLINE_WINDOW_SECONDS = 30
 CONFIG_DOCUMENTS = {"svxlink.conf", "node_info.json"}
+CSS = "text/css; charset=utf-8"
+JS = "application/javascript; charset=utf-8"
+STATIC_ASSETS = {
+    "style.css": CSS,
+    "sidebar.js": JS,
+    "index.js": JS,
+    "node.js": JS,
+    "config.js": JS,
+    "dtmf.js": JS,
+}
 VALID_RADIO_MODES = {"tx", "rx", "idle", "unknown"}
 COMMAND_CLEANUP_INTERVAL_SECONDS = 60
 _command_cleanup_lock = threading.Lock()
@@ -623,11 +633,13 @@ class PortalHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
-        elif path == "/assets/style.css":
-            body = (WEB_ROOT / "style.css").read_bytes()
+        elif path.startswith("/assets/") and path[len("/assets/"):] in STATIC_ASSETS:
+            asset = path[len("/assets/"):]
+            body = (WEB_ROOT / asset).read_bytes()
             self.send_response(200)
-            self.send_header("Content-Type", "text/css; charset=utf-8")
+            self.send_header("Content-Type", STATIC_ASSETS[asset])
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             self.wfile.write(body)
         elif path == "/api/dtmf-buttons":

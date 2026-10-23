@@ -21,6 +21,12 @@ nav a:hover, nav a.active { background: #292929; color: white; }
 .nav-heading { padding: 22px 11px 5px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .12em; }
 .nav-node { padding-left: 22px; overflow-wrap: anywhere; }
 .nav-node:hover { background: #292929; }
+.nav-node { display: flex; align-items: center; gap: 9px; }
+.node-icon { display: inline-flex; flex: none; width: 18px; height: 18px; }
+.node-icon svg { width: 18px; height: 18px; }
+.node-online .node-icon { color: var(--green); }
+.node-offline .node-icon { color: #777; }
+.node-offline .node-name { color: var(--muted); }
 .sidebar-footer { margin-top: auto; padding: 12px 10px; color: var(--muted); font-size: 12px; }
 main { max-width: 1500px; margin-left: 220px; padding: 30px clamp(20px, 4vw, 60px); }
 header, .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }

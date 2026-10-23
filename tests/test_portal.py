@@ -22,6 +22,11 @@ from portal.server import (
 )
 
 
+def fetch_asset(base_url, headers, name):
+    with urlopen(Request(f"{base_url}/assets/{name}", headers=headers), timeout=2) as response:
+        return response.read().decode("utf-8")
+
+
 class PortalStatusTests(unittest.TestCase):
     def test_admin_can_create_node_from_dashboard_api(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
@@ -235,7 +240,10 @@ class PortalStatusTests(unittest.TestCase):
                     self.assertEqual(response.status, 200)
                     detail_page = response.read().decode("utf-8")
                 self.assertIn("Radiostatus", detail_page)
-                self.assertIn("/config`", detail_page)
+                self.assertIn(
+                    "/config`",
+                    fetch_asset(base_url, {"Authorization": f"Basic {credentials}"}, "node.js"),
+                )
                 self.assertNotIn("editor-svxlink", detail_page)
 
                 dashboard_page_request = Request(
@@ -244,8 +252,11 @@ class PortalStatusTests(unittest.TestCase):
                 )
                 with urlopen(dashboard_page_request, timeout=2) as response:
                     dashboard_page = response.read().decode("utf-8")
-                self.assertIn("/config\" aria-label=\"Redigera konfiguration för", dashboard_page)
-                self.assertIn("title=\"Redigera konfiguration\"", dashboard_page)
+                dashboard_script = fetch_asset(
+                    base_url, {"Authorization": f"Basic {credentials}"}, "index.js"
+                )
+                self.assertIn("/config\" aria-label=\"Redigera konfiguration för", dashboard_script)
+                self.assertIn("title=\"Redigera konfiguration\"", dashboard_script)
 
                 config_page_request = Request(
                     f"{base_url}/nodes/{node['node_id']}/config",
@@ -255,8 +266,11 @@ class PortalStatusTests(unittest.TestCase):
                     self.assertEqual(response.status, 200)
                     config_page = response.read().decode("utf-8")
                 self.assertIn("Läser filen från noden", config_page)
-                self.assertIn("readConfig('svxlink.conf', false)", config_page)
-                self.assertIn("readConfig('node_info.json', false)", config_page)
+                config_script = fetch_asset(
+                    base_url, {"Authorization": f"Basic {credentials}"}, "config.js"
+                )
+                self.assertIn("readConfig('svxlink.conf', false)", config_script)
+                self.assertIn("readConfig('node_info.json', false)", config_script)
                 self.assertIn("editor-svxlink", config_page)
 
                 read_command_request = Request(
@@ -420,7 +434,7 @@ class PortalDtmfTests(unittest.TestCase):
                 ) as response:
                     bulk_page = response.read().decode("utf-8")
                 self.assertIn("Välj noder", bulk_page)
-                self.assertIn("/api/dtmf-commands", bulk_page)
+                self.assertIn("/api/dtmf-commands", fetch_asset(base_url, admin_headers, "dtmf.js"))
 
                 single_request = Request(
                     f"{base_url}/api/nodes/{online_node['node_id']}/dtmf-commands",
