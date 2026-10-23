@@ -26,23 +26,45 @@
       <article><span>RADIO</span><strong id="radio">—</strong></article>
       <article><span>TALGRUPP</span><strong id="talkgroup">—</strong></article>
     </section>
-    <section class="panel">
+    <section class="panel compact">
       <div class="panel-heading">
-        <div><h2>Radiostatus</h2><p class="muted">Direktström från nodens STATE_PTY. <span id="live-state">Ansluter…</span></p></div>
+        <div><h2>Radiostatus</h2></div>
+        <span class="muted">Direktström från STATE_PTY · <span id="live-state">Ansluter…</span></span>
       </div>
-      <div class="node-details">
-        <div class="detail-card"><span>Radioläge</span><strong id="radio-mode">Okänd</strong></div>
+      <div class="node-details compact">
         <div class="detail-card"><span>Signalstyrka</span><strong id="signal-level">Okänd</strong></div>
-        <div class="detail-card"><span>Aktuell talgrupp</span><strong id="current-tg">Okänd</strong></div>
         <div class="detail-card"><span>SvxLink-logik</span><strong id="logic">Okänd</strong></div>
         <div class="detail-card"><span>Senaste talare</span><strong id="tg-event">Okänd</strong></div>
         <div class="detail-card"><span>Bevakade talgrupper</span><strong id="monitor-tgs">Okänd</strong></div>
       </div>
-      <h3>Mottagare och sändare</h3>
-      <ul id="radio-devices" class="log-lines"><li class="muted">Väntar på radiodata…</li></ul>
+      <ul id="radio-devices" class="device-chips"><li class="muted">Väntar på radiodata…</li></ul>
       <p id="pty-checks" class="error" role="status" aria-live="polite"></p>
       <p id="error" class="error" role="status" aria-live="polite"></p>
     </section>
+    <section class="panel">
+      <div class="panel-heading">
+        <div><h2>DTMF-styrning</h2></div>
+        <span id="reflector-nodes" class="pill">Hämtar…</span>
+      </div>
+      <h3>Talgrupper på reflektorn</h3>
+      <div id="reflector-tgs" class="preset-buttons"><span class="muted">Hämtar reflektorstatus…</span></div>
+      <p id="reflector-updated" class="muted" role="status" aria-live="polite">Ansluter till reflektorströmmen…</p>
+      <form id="dtmf-form" class="dtmf-form">
+        <label for="dtmf-sequence">DTMF-sekvens</label>
+        <div class="dtmf-controls">
+          <input id="dtmf-sequence" name="sequence" type="text" maxlength="64"
+            pattern="[0-9A-D*#]{1,64}" autocomplete="off" required
+            aria-describedby="dtmf-help">
+          <button id="dtmf-send" type="submit" disabled>Skicka</button>
+        </div>
+        <p id="dtmf-help" class="muted">Tillåtna tecken: 0–9, A–D, * och #. Lägg till # om kommandot ska avslutas.</p>
+        <p id="dtmf-status" class="editor-status" role="status" aria-live="polite"></p>
+      </form>
+      <h3>Snabbknappar</h3>
+      <div id="dtmf-presets" class="preset-buttons"><span class="muted">Laddar knappar…</span></div>
+      <p class="muted">Knapparna är gemensamma för alla noder och hanteras under <a href="/dtmf">DTMF-styrning</a>.</p>
+    </section>
+    <div class="panel-grid">
     <section class="panel">
       <div class="panel-heading">
         <div><h2>Nodinformation</h2><p class="muted">Kontakt- och identitetsinformation för noden.</p></div>
@@ -64,25 +86,7 @@
       </div>
       <p id="service-command-status" class="editor-status" role="status" aria-live="polite"></p>
     </section>
-    <section class="panel">
-      <div class="panel-heading">
-        <div><h2>DTMF-styrning</h2><p class="muted">Skicka en DTMF-sekvens till den här noden.</p></div>
-      </div>
-      <form id="dtmf-form" class="dtmf-form">
-        <label for="dtmf-sequence">DTMF-sekvens</label>
-        <div class="dtmf-controls">
-          <input id="dtmf-sequence" name="sequence" type="text" maxlength="64"
-            pattern="[0-9A-D*#]{1,64}" autocomplete="off" required
-            aria-describedby="dtmf-help">
-          <button id="dtmf-send" type="submit" disabled>Skicka</button>
-        </div>
-        <p id="dtmf-help" class="muted">Tillåtna tecken: 0–9, A–D, * och #. Lägg till # om kommandot ska avslutas.</p>
-        <p id="dtmf-status" class="editor-status" role="status" aria-live="polite"></p>
-      </form>
-      <h3>Snabbknappar</h3>
-      <div id="dtmf-presets" class="preset-buttons"><span class="muted">Laddar knappar…</span></div>
-      <p class="muted">Knapparna är gemensamma för alla noder och hanteras under <a href="/dtmf">DTMF-styrning</a>.</p>
-    </section>
+    </div>
     <section class="panel">
       <div class="panel-heading">
         <div><h2>SvxLink-logg</h2><p class="muted">Senaste loggraderna visas överst.</p></div>

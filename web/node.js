@@ -26,7 +26,6 @@ function renderRadio(radio) {
   const mode = radioNames[radio.mode] || 'Okänd';
   const signal = Number.isInteger(radio.signal_level) ? `${radio.signal_level}%` : 'Okänd';
   setText('radio', mode);
-  setText('radio-mode', mode);
   setText('signal-level', signal);
   const devices = document.getElementById('radio-devices');
   devices.replaceChildren();
@@ -67,7 +66,8 @@ function renderNode(node) {
   setText('service', status.service_status || 'Okänd');
   if (Date.now() - liveRadioAt > 5000) renderRadio(radio);
   setText('talkgroup', status.current_tg ? `TG ${status.current_tg}` : 'Okänd');
-  setText('current-tg', status.current_tg ? `TG ${status.current_tg}` : 'Okänd');
+  currentTg = status.current_tg ? String(status.current_tg) : '';
+  renderReflector();
   setText('tg-event', status.tg_event || 'Okänd');
   setText('monitor-tgs', Array.isArray(status.monitor_tgs) && status.monitor_tgs.length ? status.monitor_tgs.join(', ') : 'Inga');
   setText('pty-checks', (status.pty_checks || []).map((check) => check.reason).filter(Boolean).join(' '));
@@ -168,9 +168,62 @@ serviceStartButton.addEventListener('click', () => controlService('start'));
 serviceStopButton.addEventListener('click', () => controlService('stop'));
 
 const presetContainer = document.getElementById('dtmf-presets');
+const reflectorContainer = document.getElementById('reflector-tgs');
+let currentTg = '';
+let reflectorState = null;
+
+function renderReflector() {
+  const d = reflectorState;
+  if (!d) return;
+  if (!d.ok) {
+    setText('reflector-nodes', 'Status saknas');
+    setText('reflector-updated', d.error || 'Ansluter till reflektorströmmen…');
+    return;
+  }
+  const online = document.getElementById('online').classList.contains('online');
+  reflectorContainer.replaceChildren();
+  for (const tg of d.talkgroups) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `tg-button${tg.talkers ? ' tx' : ''}${String(tg.tg) === currentTg ? ' active' : ''}`;
+    button.title = `Anslut till TG ${tg.tg} (91${tg.tg}#)`;
+    button.disabled = !online || dtmfSending;
+    button.append(`TG ${tg.tg}`);
+    const nodes = document.createElement('span');
+    nodes.className = 'tg-badge';
+    nodes.textContent = `${tg.nodes} nod${tg.nodes === 1 ? '' : 'er'}`;
+    button.append(nodes);
+    if (tg.talkers) {
+      const tx = document.createElement('span');
+      tx.className = 'tg-badge tx';
+      tx.textContent = `TX ${tg.talkers}`;
+      button.append(tx);
+    }
+    button.addEventListener('click', () => sendDtmf(`91${tg.tg}#`));
+    reflectorContainer.append(button);
+  }
+  if (!d.talkgroups.length) reflectorContainer.textContent = 'Inga noder har valt en talgrupp över 0 just nu.';
+  setText('reflector-nodes', `${d.node_count} synliga noder`);
+  setText('reflector-updated', d.connected
+    ? `Live · uppdaterad ${new Date(d.updated_at || Date.now()).toLocaleTimeString('sv-SE')}`
+    : (d.error || 'Reflektorströmmen är frånkopplad.'));
+}
+
+function startReflectorStream() {
+  const source = new EventSource('/api/reflector-events');
+  source.addEventListener('reflector', (event) => {
+    try {
+      reflectorState = JSON.parse(event.data);
+      renderReflector();
+    } catch (error) {
+      setText('reflector-updated', 'Kunde inte läsa reflektorströmmen.');
+    }
+  });
+}
 
 function setPresetsDisabled(disabled) {
   for (const button of presetContainer.querySelectorAll('button')) button.disabled = disabled;
+  for (const button of reflectorContainer.querySelectorAll('button')) button.disabled = disabled;
 }
 
 async function sendDtmf(sequence) {
@@ -246,6 +299,7 @@ async function refresh() {
 }
 
 loadPresets();
+startReflectorStream();
 refresh();
 startRadioStream();
 setInterval(refresh, 3000);

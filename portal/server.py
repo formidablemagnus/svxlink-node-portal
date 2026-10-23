@@ -21,6 +21,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+from portal.reflector import REFLECTOR_HUB
+
 ROOT = Path(__file__).resolve().parent.parent
 WEB_ROOT = ROOT / "web"
 MAX_REQUEST_BYTES = 64 * 1024
@@ -822,6 +824,8 @@ class PortalHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif path == "/api/dtmf-buttons":
             self.send_json(200, {"buttons": list_dtmf_buttons()})
+        elif path == "/api/reflector-events":
+            self.stream_reflector_events()
         elif path == "/api/nodes":
             self.send_json(200, {"nodes": node_rows()})
         elif path.startswith("/api/nodes/") and path.endswith("/radio-events"):
@@ -860,6 +864,36 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.send_json(200, result)
         else:
             self.send_json(404, {"error": "Sidan hittades inte."})
+
+    def stream_reflector_events(self):
+        REFLECTOR_HUB.ensure_started()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+        def send(data):
+            payload = json.dumps(data, ensure_ascii=False)
+            self.wfile.write(f"event: reflector\ndata: {payload}\n\n".encode("utf-8"))
+            self.wfile.flush()
+
+        try:
+            self.wfile.write(b"retry: 2000\n\n")
+            sequence, state = REFLECTOR_HUB.snapshot()
+            send(state)
+            while True:
+                new_sequence, state = REFLECTOR_HUB.wait(sequence, RADIO_STREAM_KEEPALIVE_SECONDS)
+                if new_sequence > sequence:
+                    sequence = new_sequence
+                    send(state)
+                else:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionError, OSError):
+            pass
 
     def stream_radio_events(self, node):
         node_id = node["id"]
