@@ -456,6 +456,9 @@ class PortalServiceCommandTests(unittest.TestCase):
                     base_url, {"Authorization": f"Basic {credentials}"}, "node.js"
                 )
                 self.assertIn("logs.slice().reverse()", node_script)
+                self.assertIn("waitForServiceStatus(operation === 'start')", node_script)
+                self.assertIn("Du kan nu starta den.", node_script)
+                self.assertIn("Du kan nu stänga av den.", node_script)
             finally:
                 server.shutdown()
                 server.server_close()

@@ -13,11 +13,13 @@ const serviceCommandStatus = document.getElementById('service-command-status');
 let serviceCommandRunning = false;
 let nodeOnline = false;
 let serviceActive = null;
+let serviceStatusExpected = null;
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 function updateServiceControls() {
-  serviceStartButton.disabled = !nodeOnline || serviceCommandRunning || serviceActive !== false;
-  serviceStopButton.disabled = !nodeOnline || serviceCommandRunning || serviceActive !== true;
+  const waitingForStatus = serviceStatusExpected !== null;
+  serviceStartButton.disabled = !nodeOnline || serviceCommandRunning || waitingForStatus || serviceActive !== false;
+  serviceStopButton.disabled = !nodeOnline || serviceCommandRunning || waitingForStatus || serviceActive !== true;
 }
 
 function renderNode(node) {
@@ -42,6 +44,7 @@ function renderNode(node) {
   setText('node-id', node.id);
   nodeOnline = Boolean(node.online);
   serviceActive = typeof status.active === 'boolean' ? status.active : null;
+  if (serviceActive === serviceStatusExpected) serviceStatusExpected = null;
   updateServiceControls();
   const logs = Array.isArray(status.logs) ? status.logs : [];
   const logList = document.getElementById('log-lines');
@@ -81,6 +84,23 @@ async function waitForCommand(commandId, successMessage, failureMessage) {
   throw new Error('Nodagenten har ännu inte bekräftat åtgärden.');
 }
 
+async function waitForServiceStatus(expectedActive) {
+  serviceStatusExpected = expectedActive;
+  updateServiceControls();
+  const expectedStatus = expectedActive ? 'aktiv' : 'avstängd';
+  serviceCommandStatus.textContent = `Åtgärden är utförd. Väntar på rapporterad status: ${expectedStatus}…`;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const node = await refresh();
+    if (node?.online && node.status?.active === expectedActive) {
+      return expectedActive
+        ? 'SvxLink-tjänsten är aktiv. Du kan nu stänga av den.'
+        : 'SvxLink-tjänsten är avstängd. Du kan nu starta den.';
+    }
+    if (attempt < 59) await wait(1000);
+  }
+  throw new Error(`Noden bekräftade inte att tjänsten blev ${expectedStatus}.`);
+}
+
 async function controlService(operation) {
   serviceCommandRunning = true;
   updateServiceControls();
@@ -95,16 +115,17 @@ async function controlService(operation) {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-    serviceCommandStatus.textContent = await waitForCommand(
+    await waitForCommand(
       data.command_id,
-      operation === 'start' ? 'SvxLink-tjänsten startades.' : 'SvxLink-tjänsten stängdes av.',
+      'Tjänståtgärden genomfördes.',
       'Nodagenten kunde inte ändra tjänstestatusen.'
     );
-    await refresh();
+    serviceCommandStatus.textContent = await waitForServiceStatus(operation === 'start');
   } catch (error) {
-    serviceCommandStatus.textContent = `Kunde inte ändra SvxLink-tjänsten: ${error.message}`;
+    serviceCommandStatus.textContent = `SvxLink-åtgärden kunde inte bekräftas: ${error.message}`;
   } finally {
     serviceCommandRunning = false;
+    serviceStatusExpected = null;
     updateServiceControls();
   }
 }
@@ -182,9 +203,11 @@ async function refresh() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     renderNode(data.node);
+    return data.node;
   } catch (error) {
     setText('error', `Kunde inte hämta nodstatus: ${error.message}`);
     setText('updated', 'Uppdatering misslyckades');
+    return null;
   }
 }
 
