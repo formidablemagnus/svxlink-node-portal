@@ -15,6 +15,7 @@ from http.server import ThreadingHTTPServer
 from portal.server import (
     PortalHandler,
     claim_agent_commands,
+    complete_agent_command,
     database,
     provision_node,
     validate_dtmf_command,
@@ -369,6 +370,92 @@ class PortalStatusTests(unittest.TestCase):
                 with self.assertRaises(HTTPError) as error:
                     urlopen(bad_token_request, timeout=2)
                 self.assertEqual(error.exception.code, 401)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+
+class PortalServiceCommandTests(unittest.TestCase):
+    def test_admin_service_request_is_queued_for_agent(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {
+                "PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3"),
+                "PORTAL_ADMIN_USER": "admin",
+                "PORTAL_ADMIN_PASSWORD": "this-is-a-long-test-password",
+            },
+        ):
+            node = provision_node("Online node")
+            with database() as connection:
+                connection.execute(
+                    "UPDATE nodes SET last_seen = ? WHERE id = ?",
+                    ("2999-01-01T00:00:00+00:00", node["node_id"]),
+                )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://127.0.0.1:{server.server_port}"
+                credentials = base64.b64encode(
+                    b"admin:this-is-a-long-test-password"
+                ).decode()
+                headers = {
+                    "Authorization": f"Basic {credentials}",
+                    "Content-Type": "application/json",
+                }
+                endpoint = f"{base_url}/api/nodes/{node['node_id']}/service-commands"
+                request = Request(
+                    endpoint,
+                    data=json.dumps({"operation": "start"}).encode("utf-8"),
+                    headers=headers,
+                )
+                with urlopen(request, timeout=2) as response:
+                    command_id = json.loads(response.read())["command_id"]
+
+                queued = claim_agent_commands(node["node_id"])
+                self.assertEqual(
+                    queued,
+                    [{"id": command_id, "action": "service", "operation": "start"}],
+                )
+                self.assertTrue(complete_agent_command(node["node_id"], command_id, {"ok": True}))
+
+                with urlopen(
+                    Request(
+                        f"{base_url}/api/commands/{command_id}",
+                        headers={"Authorization": f"Basic {credentials}"},
+                    ),
+                    timeout=2,
+                ) as response:
+                    self.assertEqual(
+                        json.loads(response.read()),
+                        {"status": "completed", "result": {"ok": True}},
+                    )
+
+                with self.assertRaises(HTTPError) as invalid_operation:
+                    urlopen(
+                        Request(
+                            endpoint,
+                            data=json.dumps({"operation": "restart"}).encode("utf-8"),
+                            headers=headers,
+                        ),
+                        timeout=2,
+                    )
+                self.assertEqual(invalid_operation.exception.code, 400)
+                with urlopen(
+                    Request(
+                        f"{base_url}/nodes/{node['node_id']}",
+                        headers={"Authorization": f"Basic {credentials}"},
+                    ),
+                    timeout=2,
+                ) as response:
+                    detail_page = response.read().decode("utf-8")
+                self.assertIn('id="service-start"', detail_page)
+                self.assertIn('id="service-stop"', detail_page)
+                node_script = fetch_asset(
+                    base_url, {"Authorization": f"Basic {credentials}"}, "node.js"
+                )
+                self.assertIn("logs.slice().reverse()", node_script)
             finally:
                 server.shutdown()
                 server.server_close()

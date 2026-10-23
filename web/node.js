@@ -7,7 +7,18 @@ const dtmfInput = document.getElementById('dtmf-sequence');
 const dtmfButton = document.getElementById('dtmf-send');
 const dtmfStatus = document.getElementById('dtmf-status');
 let dtmfSending = false;
+const serviceStartButton = document.getElementById('service-start');
+const serviceStopButton = document.getElementById('service-stop');
+const serviceCommandStatus = document.getElementById('service-command-status');
+let serviceCommandRunning = false;
+let nodeOnline = false;
+let serviceActive = null;
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+function updateServiceControls() {
+  serviceStartButton.disabled = !nodeOnline || serviceCommandRunning || serviceActive !== false;
+  serviceStopButton.disabled = !nodeOnline || serviceCommandRunning || serviceActive !== true;
+}
 
 function renderNode(node) {
   const status = node.status || {};
@@ -29,11 +40,14 @@ function renderNode(node) {
   setText('service-status', status.service_status || 'Okänd');
   setText('last-seen', lastSeen);
   setText('node-id', node.id);
+  nodeOnline = Boolean(node.online);
+  serviceActive = typeof status.active === 'boolean' ? status.active : null;
+  updateServiceControls();
   const logs = Array.isArray(status.logs) ? status.logs : [];
   const logList = document.getElementById('log-lines');
   logList.replaceChildren();
   if (logs.length) {
-    for (const line of logs) {
+    for (const line of logs.slice().reverse()) {
       const item = document.createElement('li');
       item.textContent = line;
       logList.append(item);
@@ -54,18 +68,49 @@ function renderNode(node) {
   document.getElementById('updated').textContent = `Uppdaterad ${new Date().toLocaleTimeString('sv-SE')}`;
 }
 
-async function waitForCommand(commandId) {
+async function waitForCommand(commandId, successMessage, failureMessage) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     await wait(1000);
     const response = await fetch(`/api/commands/${encodeURIComponent(commandId)}`, {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const result = await response.json();
-    if (result.status === 'completed') return 'DTMF-sekvensen skickades.';
-    if (result.status === 'failed') throw new Error(result.result?.error || 'Nodagenten kunde inte skicka sekvensen.');
+    if (result.status === 'completed') return successMessage;
+    if (result.status === 'failed') throw new Error(result.result?.error || failureMessage);
     if (result.status === 'expired') throw new Error('Åtgärden hann löpa ut innan nodagenten tog emot den.');
   }
   throw new Error('Nodagenten har ännu inte bekräftat åtgärden.');
 }
+
+async function controlService(operation) {
+  serviceCommandRunning = true;
+  updateServiceControls();
+  serviceCommandStatus.textContent = operation === 'start'
+    ? 'Startar SvxLink-tjänsten…'
+    : 'Stänger av SvxLink-tjänsten…';
+  try {
+    const response = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}/service-commands`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({operation})
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    serviceCommandStatus.textContent = await waitForCommand(
+      data.command_id,
+      operation === 'start' ? 'SvxLink-tjänsten startades.' : 'SvxLink-tjänsten stängdes av.',
+      'Nodagenten kunde inte ändra tjänstestatusen.'
+    );
+    await refresh();
+  } catch (error) {
+    serviceCommandStatus.textContent = `Kunde inte ändra SvxLink-tjänsten: ${error.message}`;
+  } finally {
+    serviceCommandRunning = false;
+    updateServiceControls();
+  }
+}
+
+serviceStartButton.addEventListener('click', () => controlService('start'));
+serviceStopButton.addEventListener('click', () => controlService('stop'));
 
 const presetContainer = document.getElementById('dtmf-presets');
 
@@ -86,7 +131,11 @@ async function sendDtmf(sequence) {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-    dtmfStatus.textContent = await waitForCommand(data.command_id);
+    dtmfStatus.textContent = await waitForCommand(
+      data.command_id,
+      'DTMF-sekvensen skickades.',
+      'Nodagenten kunde inte skicka sekvensen.'
+    );
     return true;
   } catch (error) {
     dtmfStatus.textContent = `DTMF kunde inte skickas: ${error.message}`;

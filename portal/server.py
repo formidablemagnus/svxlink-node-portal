@@ -296,6 +296,17 @@ def validate_dtmf_command(payload):
     return {"action": "dtmf", "sequence": sequence}
 
 
+def validate_service_command(payload):
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"action", "operation"}
+        or payload["action"] != "service"
+        or payload["operation"] not in ("start", "stop")
+    ):
+        raise ValueError("Ogiltig SvxLink-tjänståtgärd.")
+    return {"action": "service", "operation": payload["operation"]}
+
+
 def validate_dtmf_buttons(payload):
     if (
         not isinstance(payload, dict)
@@ -336,6 +347,8 @@ def replace_dtmf_buttons(buttons):
 def validate_agent_command(payload):
     if isinstance(payload, dict) and payload.get("action") == "dtmf":
         return validate_dtmf_command(payload)
+    if isinstance(payload, dict) and payload.get("action") == "service":
+        return validate_service_command(payload)
     return validate_config_command(payload)
 
 
@@ -472,6 +485,9 @@ def complete_agent_command(node_id, command_id, result):
     elif command["action"] == "dtmf":
         if set(result) != {"ok"}:
             raise ValueError("DTMF-resultatet har ogiltigt format.")
+    elif command["action"] == "service":
+        if set(result) != {"ok"}:
+            raise ValueError("Tjänstresultatet har ogiltigt format.")
     else:
         raise ValueError("Okänd konfigurationsåtgärd.")
     try:
@@ -784,6 +800,30 @@ class PortalHandler(BaseHTTPRequestHandler):
                     raise ValueError("DTMF-begäran måste innehålla en sekvens.")
                 command = validate_dtmf_command(
                     {"action": "dtmf", "sequence": payload["sequence"]}
+                )
+                command_id = enqueue_agent_command(node_id, command)
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            except RuntimeError as exc:
+                self.send_json(409, {"error": str(exc)})
+                return
+            if command_id is None:
+                self.send_json(404, {"error": "Noden hittades inte."})
+            else:
+                self.send_json(202, {"command_id": command_id, "status": "pending"})
+            return
+
+        if path.startswith("/api/nodes/") and path.endswith("/service-commands"):
+            if not self.require_admin():
+                return
+            node_id = path[len("/api/nodes/"):-len("/service-commands")].rstrip("/")
+            try:
+                payload = self.read_json_body(MAX_REQUEST_BYTES)
+                if not isinstance(payload, dict) or set(payload) != {"operation"}:
+                    raise ValueError("Tjänstebegäran måste innehålla en åtgärd.")
+                command = validate_service_command(
+                    {"action": "service", "operation": payload["operation"]}
                 )
                 command_id = enqueue_agent_command(node_id, command)
             except (ValueError, UnicodeError, json.JSONDecodeError) as exc:

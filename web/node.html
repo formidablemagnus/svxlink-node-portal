@@ -51,6 +51,16 @@
     </section>
     <section class="panel">
       <div class="panel-heading">
+        <div><h2>SvxLink-tjänst</h2><p class="muted">Starta eller stäng av SvxLink på den här noden.</p></div>
+      </div>
+      <div class="service-actions">
+        <button id="service-start" type="button" disabled>Starta tjänsten</button>
+        <button id="service-stop" type="button" disabled>Stäng av tjänsten</button>
+      </div>
+      <p id="service-command-status" class="editor-status" role="status" aria-live="polite"></p>
+    </section>
+    <section class="panel">
+      <div class="panel-heading">
         <div><h2>DTMF-styrning</h2><p class="muted">Skicka en DTMF-sekvens till den här noden.</p></div>
       </div>
       <form id="dtmf-form" class="dtmf-form">
@@ -70,7 +80,7 @@
     </section>
     <section class="panel">
       <div class="panel-heading">
-        <div><h2>SvxLink-logg</h2><p class="muted">Senaste loggraderna från nodens webpanel.</p></div>
+        <div><h2>SvxLink-logg</h2><p class="muted">Senaste loggraderna visas överst.</p></div>
         <span id="log-count" class="pill">0 rader</span>
       </div>
       <ol id="log-lines" class="log-lines">

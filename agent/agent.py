@@ -19,6 +19,7 @@ MAX_LOG_LINE_BYTES = 512
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 CONFIG_DOCUMENTS = {"svxlink.conf", "node_info.json"}
 CONFIG_HELPER = "/usr/local/libexec/svxlink-node-portal-config"
+SYSTEMCTL_BIN = "/usr/bin/systemctl"
 
 
 def required_environment(name):
@@ -276,9 +277,42 @@ def execute_dtmf_command(command, config_path):
     return {"ok": True}
 
 
+def execute_service_command(command):
+    if (
+        not isinstance(command, dict)
+        or set(command) != {"id", "action", "operation"}
+        or not isinstance(command["id"], str)
+        or not re.fullmatch(r"[0-9a-f]{32}", command["id"])
+        or command["action"] != "service"
+        or command["operation"] not in ("start", "stop")
+    ):
+        raise ValueError("SvxLink-tjänståtgärden från portalen har ogiltigt format.")
+
+    try:
+        process = subprocess.run(
+            ["sudo", "-n", SYSTEMCTL_BIN, command["operation"], "svxlink.service"],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "Tidsgränsen överskreds vid tjänståtgärden."}
+    except OSError as exc:
+        return {"ok": False, "error": f"Kunde inte starta systemctl: {exc}"}
+    if process.returncode == 0:
+        return {"ok": True}
+    detail = process.stderr.decode("utf-8", errors="replace").strip()
+    return {
+        "ok": False,
+        "error": (detail or "systemctl misslyckades.")[:1024],
+    }
+
+
 def execute_agent_command(command, config_path):
     if isinstance(command, dict) and command.get("action") == "dtmf":
         return execute_dtmf_command(command, config_path)
+    if isinstance(command, dict) and command.get("action") == "service":
+        return execute_service_command(command)
     return execute_config_command(command)
 
 

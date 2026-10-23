@@ -90,8 +90,13 @@ install_agent_config_helper() {
   local source="$SCRIPT_DIR/config_helper.py"
   local helper="/usr/local/libexec/svxlink-node-portal-config"
   local sudoers="/etc/sudoers.d/svxlink-node-portal-agent"
+  local systemctl="/usr/bin/systemctl"
   if [[ ! -f "$source" ]]; then
     say_error "Konfigurationshjälpen saknas: $source"
+    exit 1
+  fi
+  if [[ ! -x "$systemctl" ]]; then
+    say_error "systemctl saknas på den förväntade platsen: $systemctl"
     exit 1
   fi
   if ! command -v visudo >/dev/null 2>&1; then
@@ -102,7 +107,9 @@ install_agent_config_helper() {
   install -o root -g root -m 0755 "$source" "$helper"
   local sudoers_tmp
   sudoers_tmp="$(mktemp /etc/sudoers.d/svxlink-node-portal-agent.XXXXXX)"
-  printf '%s\n' 'svxlink ALL=(root) NOPASSWD: /usr/local/libexec/svxlink-node-portal-config' > "$sudoers_tmp"
+  printf '%s\n' \
+    'svxlink ALL=(root) NOPASSWD: /usr/local/libexec/svxlink-node-portal-config, /usr/bin/systemctl start svxlink.service, /usr/bin/systemctl stop svxlink.service' \
+    > "$sudoers_tmp"
   chmod 0440 "$sudoers_tmp"
   if ! visudo -cf "$sudoers_tmp"; then
     rm -f "$sudoers_tmp"

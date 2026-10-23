@@ -2,8 +2,8 @@
 
 Central dashboard and outbound node agent for managing multiple SvxLink nodes.
 The portal reports service, radio, talkgroup, logic and callsign status, lets
-portal administrators edit node configuration, and can send DTMF sequences to
-individual or selected online nodes.
+portal administrators start or stop SvxLink, edit node configuration, and send
+DTMF sequences to individual or selected online nodes.
 
 ## Components
 
@@ -103,6 +103,14 @@ those nodes (for example `0.0.0.0`) and restrict port 8080 with the server
 firewall to trusted node addresses. Restart the portal service after changing
 its settings.
 
+### Control SvxLink and view logs
+
+On an online node's detail page, portal administrators can start or stop the
+`svxlink.service`. The latest log lines from the node are shown first. The agent
+installer grants the `svxlink` account sudo access only to the fixed
+configuration helper and `systemctl start/stop svxlink.service`; reinstall or
+update the agent role to install this rule.
+
 ### Edit node configuration
 
 The node detail page links to a separate configuration page. Portal
@@ -116,13 +124,13 @@ your edits in that case. `node_info.json` must remain valid JSON. Saving does
 not restart SvxLink; restart it manually when required.
 
 The agent installer installs a root-owned helper limited to those two fixed
-paths and a sudoers rule allowing the `svxlink` account to run only that
-helper. The agent systemd service therefore allows the helper's controlled
-privilege elevation. Keep portal access restricted to trusted administrators
-and prefer HTTPS: an authorized portal user can change the node's SvxLink
-configuration. Configuration contents pass through the portal database while
-commands are processed, so keep that database accessible only to the portal
-service account and system administrators.
+paths and the sudoers rule described above. The agent systemd service therefore
+allows these controlled privilege elevations. Keep portal access restricted to
+trusted administrators and prefer HTTPS: an authorized portal user can change
+the node's SvxLink configuration or control its service. Configuration contents
+pass through the portal database while commands are processed, so keep that
+database accessible only to the portal service account and system
+administrators.
 
 ### Send DTMF commands
 

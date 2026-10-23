@@ -12,6 +12,7 @@ from agent.agent import (
     CONFIG_HELPER,
     execute_config_command,
     execute_dtmf_command,
+    execute_service_command,
     make_status,
     read_dtmf_control_paths,
     read_logic_info,
@@ -263,6 +264,29 @@ class AgentStatusTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "ogiltigt format"):
                 execute_dtmf_command(command, "/missing/svxlink.conf")
         open_path.assert_not_called()
+
+    def test_service_command_only_runs_fixed_svxlink_service_operation(self):
+        command = {"id": "a" * 32, "action": "service", "operation": "stop"}
+        with patch(
+            "agent.agent.subprocess.run",
+            return_value=SimpleNamespace(returncode=0, stderr=b""),
+        ) as run_systemctl:
+            result = execute_service_command(command)
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(
+            run_systemctl.call_args.args[0],
+            ["sudo", "-n", "/usr/bin/systemctl", "stop", "svxlink.service"],
+        )
+        for operation in ("restart", "start;reboot"):
+            with self.subTest(operation=operation), patch(
+                "agent.agent.subprocess.run"
+            ) as run_invalid:
+                with self.assertRaisesRegex(ValueError, "ogiltigt format"):
+                    execute_service_command(
+                        {"id": "a" * 32, "action": "service", "operation": operation}
+                    )
+                run_invalid.assert_not_called()
 
 
 if __name__ == "__main__":
