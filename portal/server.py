@@ -28,6 +28,8 @@ MAX_LOG_LINE_BYTES = 512
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 MAX_COMMAND_REQUEST_BYTES = MAX_CONFIG_BYTES * 6 + 65536
 MAX_COMMAND_RESULT_BYTES = MAX_CONFIG_BYTES * 6 + 65536
+MAX_DTMF_SEQUENCE_LENGTH = 64
+MAX_DTMF_NODES = 100
 AGENT_COMMAND_TTL_SECONDS = 300
 ONLINE_WINDOW_SECONDS = 30
 CONFIG_DOCUMENTS = {"svxlink.conf", "node_info.json"}
@@ -256,12 +258,34 @@ def validate_config_command(payload):
     return payload
 
 
+def validate_dtmf_command(payload):
+    if not isinstance(payload, dict) or set(payload) != {"action", "sequence"}:
+        raise ValueError("DTMF-begäran har ogiltigt format.")
+    sequence = payload["sequence"]
+    if (
+        not isinstance(sequence, str)
+        or not 1 <= len(sequence) <= MAX_DTMF_SEQUENCE_LENGTH
+        or not re.fullmatch(r"[0-9A-D*#]+", sequence)
+    ):
+        raise ValueError(
+            f"DTMF-sekvensen måste innehålla 1–{MAX_DTMF_SEQUENCE_LENGTH} tecken "
+            "från 0–9, A–D, * och #."
+        )
+    return {"action": "dtmf", "sequence": sequence}
+
+
+def validate_agent_command(payload):
+    if isinstance(payload, dict) and payload.get("action") == "dtmf":
+        return validate_dtmf_command(payload)
+    return validate_config_command(payload)
+
+
 def reject_json_constant(value):
     raise ValueError(f"Ogiltigt JSON-konstantvärde: {value}.")
 
 
 def enqueue_agent_command(node_id, payload):
-    command = validate_config_command(payload)
+    command = validate_agent_command(payload)
     now = datetime.now(timezone.utc)
     created_at = now.isoformat()
     with database() as connection:
@@ -282,14 +306,14 @@ def enqueue_agent_command(node_id, payload):
             logging.error("Ogiltig last_seen-tid för nod %s.", node_id)
             raise RuntimeError("Nodens senaste kontakttid är ogiltig.") from None
         if (now - last_seen).total_seconds() > ONLINE_WINDOW_SECONDS:
-            raise RuntimeError("Noden är offline. Anslut den innan du ändrar filer.")
+            raise RuntimeError("Noden är offline. Anslut den innan du skickar kommandon.")
         count = connection.execute(
             "SELECT COUNT(*) FROM agent_commands "
             "WHERE node_id = ? AND status IN ('pending', 'in_progress')",
             (node_id,),
         ).fetchone()[0]
         if count >= 5:
-            raise ValueError("För många väntande konfigurationsåtgärder för noden.")
+            raise ValueError("För många väntande åtgärder för noden.")
         command_id = uuid.uuid4().hex
         connection.execute(
             """INSERT INTO agent_commands
@@ -311,11 +335,19 @@ def claim_agent_commands(node_id):
             "WHERE node_id = ? AND created_at < ? AND status IN ('pending', 'in_progress')",
             (now_text, node_id, expired_before),
         )
-        connection.execute(
-            "UPDATE agent_commands SET status = 'pending', updated_at = ? "
+        stale_commands = connection.execute(
+            "SELECT id, payload_json FROM agent_commands "
             "WHERE node_id = ? AND status = 'in_progress' AND updated_at < ?",
-            (now_text, node_id, retry_before),
-        )
+            (node_id, retry_before),
+        ).fetchall()
+        for row in stale_commands:
+            payload = json.loads(row["payload_json"])
+            status = "expired" if payload.get("action") == "dtmf" else "pending"
+            connection.execute(
+                "UPDATE agent_commands SET status = ?, updated_at = ? "
+                "WHERE id = ? AND status = 'in_progress'",
+                (status, now_text, row["id"]),
+            )
         rows = connection.execute(
             "SELECT id, payload_json FROM agent_commands "
             "WHERE node_id = ? AND status = 'pending' ORDER BY created_at LIMIT 1",
@@ -378,6 +410,9 @@ def complete_agent_command(node_id, command_id, result):
             or not re.fullmatch(r"[0-9a-f]{64}", result["sha256"])
         ):
             raise ValueError("Skrivresultatet innehåller ogiltiga uppgifter.")
+    elif command["action"] == "dtmf":
+        if set(result) != {"ok"}:
+            raise ValueError("DTMF-resultatet har ogiltigt format.")
     else:
         raise ValueError("Okänd konfigurationsåtgärd.")
     try:
@@ -531,6 +566,14 @@ class PortalHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
+        elif path == "/dtmf":
+            body = (WEB_ROOT / "dtmf.html").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
         elif path == "/assets/style.css":
             body = (WEB_ROOT / "style.css").read_bytes()
             self.send_response(200)
@@ -557,11 +600,113 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.send_json(404, {"error": "Konfigurationsåtgärden hittades inte."})
             else:
                 self.send_json(200, result)
+        elif path.startswith("/api/commands/"):
+            command_id = path[len("/api/commands/"):]
+            if not command_id or "/" in command_id:
+                self.send_json(404, {"error": "Åtgärden hittades inte."})
+                return
+            result = take_agent_command_result(command_id)
+            if result is None:
+                self.send_json(404, {"error": "Åtgärden hittades inte."})
+            else:
+                self.send_json(200, result)
         else:
             self.send_json(404, {"error": "Sidan hittades inte."})
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/api/dtmf-commands":
+            if not self.require_admin():
+                return
+            try:
+                payload = self.read_json_body(MAX_REQUEST_BYTES)
+                if (
+                    not isinstance(payload, dict)
+                    or set(payload) != {"node_ids", "sequence"}
+                    or not isinstance(payload["node_ids"], list)
+                    or not 1 <= len(payload["node_ids"]) <= MAX_DTMF_NODES
+                ):
+                    raise ValueError(
+                        f"Begäran måste innehålla 1–{MAX_DTMF_NODES} nod-ID:n och en DTMF-sekvens."
+                    )
+                command = validate_dtmf_command(
+                    {"action": "dtmf", "sequence": payload["sequence"]}
+                )
+                node_ids = payload["node_ids"]
+                if (
+                    any(
+                        not isinstance(node_id, str)
+                        or not re.fullmatch(r"[0-9a-f]{32}", node_id)
+                        for node_id in node_ids
+                    )
+                    or len(set(node_ids)) != len(node_ids)
+                ):
+                    raise ValueError("Nod-ID:n måste vara unika och ha giltigt format.")
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+
+            results = []
+            for node_id in node_ids:
+                node = node_by_id(node_id)
+                if node is None:
+                    results.append(
+                        {
+                            "node_id": node_id,
+                            "name": node_id,
+                            "status": "failed",
+                            "error": "Noden hittades inte.",
+                        }
+                    )
+                    continue
+                try:
+                    command_id = enqueue_agent_command(node_id, command)
+                except (ValueError, RuntimeError) as exc:
+                    results.append(
+                        {
+                            "node_id": node_id,
+                            "name": node["name"],
+                            "status": "failed",
+                            "error": str(exc),
+                        }
+                    )
+                    continue
+                results.append(
+                    {
+                        "node_id": node_id,
+                        "name": node["name"],
+                        "command_id": command_id,
+                        "status": "pending" if command_id else "failed",
+                        **({"error": "Noden hittades inte."} if command_id is None else {}),
+                    }
+                )
+            self.send_json(202, {"results": results})
+            return
+
+        if path.startswith("/api/nodes/") and path.endswith("/dtmf-commands"):
+            if not self.require_admin():
+                return
+            node_id = path[len("/api/nodes/"):-len("/dtmf-commands")].rstrip("/")
+            try:
+                payload = self.read_json_body(MAX_REQUEST_BYTES)
+                if not isinstance(payload, dict) or set(payload) != {"sequence"}:
+                    raise ValueError("DTMF-begäran måste innehålla en sekvens.")
+                command = validate_dtmf_command(
+                    {"action": "dtmf", "sequence": payload["sequence"]}
+                )
+                command_id = enqueue_agent_command(node_id, command)
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            except RuntimeError as exc:
+                self.send_json(409, {"error": str(exc)})
+                return
+            if command_id is None:
+                self.send_json(404, {"error": "Noden hittades inte."})
+            else:
+                self.send_json(202, {"command_id": command_id, "status": "pending"})
+            return
+
         if path.startswith("/api/nodes/") and path.endswith("/config-commands"):
             if not self.require_admin():
                 return

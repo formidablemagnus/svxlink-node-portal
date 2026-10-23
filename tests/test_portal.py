@@ -12,7 +12,14 @@ from urllib.request import Request, urlopen
 
 from http.server import ThreadingHTTPServer
 
-from portal.server import PortalHandler, database, provision_node, validate_status
+from portal.server import (
+    PortalHandler,
+    claim_agent_commands,
+    database,
+    provision_node,
+    validate_dtmf_command,
+    validate_status,
+)
 
 
 class PortalStatusTests(unittest.TestCase):
@@ -264,6 +271,172 @@ class PortalStatusTests(unittest.TestCase):
                 with self.assertRaises(HTTPError) as error:
                     urlopen(bad_token_request, timeout=2)
                 self.assertEqual(error.exception.code, 401)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+
+class PortalDtmfTests(unittest.TestCase):
+    def test_validates_dtmf_sequence_characters_and_length(self):
+        self.assertEqual(
+            validate_dtmf_command({"action": "dtmf", "sequence": "*12AB#"}),
+            {"action": "dtmf", "sequence": "*12AB#"},
+        )
+        for sequence in ("", "12a", "12;reboot", "1" * 65):
+            with self.subTest(sequence=sequence), self.assertRaises(ValueError):
+                validate_dtmf_command({"action": "dtmf", "sequence": sequence})
+
+    def test_single_and_bulk_dtmf_commands_through_agent_queue(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {
+                "PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3"),
+                "PORTAL_ADMIN_USER": "admin",
+                "PORTAL_ADMIN_PASSWORD": "this-is-a-long-test-password",
+            },
+        ):
+            online_node = provision_node("Online node")
+            offline_node = provision_node("Offline node")
+            with database() as connection:
+                connection.execute(
+                    "UPDATE nodes SET last_seen = ? WHERE id = ?",
+                    ("2999-01-01T00:00:00+00:00", online_node["node_id"]),
+                )
+                connection.execute(
+                    "UPDATE nodes SET last_seen = ? WHERE id = ?",
+                    ("2000-01-01T00:00:00+00:00", offline_node["node_id"]),
+                )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://127.0.0.1:{server.server_port}"
+                credentials = base64.b64encode(
+                    b"admin:this-is-a-long-test-password"
+                ).decode()
+                admin_headers = {"Authorization": f"Basic {credentials}"}
+                agent_headers = {
+                    "Authorization": f"Bearer {online_node['token']}"
+                }
+
+                with urlopen(
+                    Request(
+                        f"{base_url}/nodes/{online_node['node_id']}",
+                        headers=admin_headers,
+                    ),
+                    timeout=2,
+                ) as response:
+                    detail_page = response.read().decode("utf-8")
+                self.assertIn("DTMF-styrning", detail_page)
+
+                with urlopen(
+                    Request(f"{base_url}/dtmf", headers=admin_headers),
+                    timeout=2,
+                ) as response:
+                    bulk_page = response.read().decode("utf-8")
+                self.assertIn("Välj noder", bulk_page)
+                self.assertIn("/api/dtmf-commands", bulk_page)
+
+                single_request = Request(
+                    f"{base_url}/api/nodes/{online_node['node_id']}/dtmf-commands",
+                    data=json.dumps({"sequence": "*123#"}).encode("utf-8"),
+                    headers={**admin_headers, "Content-Type": "application/json"},
+                )
+                with urlopen(single_request, timeout=2) as response:
+                    single_command_id = json.loads(
+                        response.read().decode("utf-8")
+                    )["command_id"]
+
+                with urlopen(
+                    Request(
+                        f"{base_url}/api/v1/agent/commands",
+                        headers=agent_headers,
+                    ),
+                    timeout=2,
+                ) as response:
+                    commands = json.loads(response.read().decode("utf-8"))["commands"]
+                self.assertEqual(commands[0]["id"], single_command_id)
+                self.assertEqual(commands[0]["action"], "dtmf")
+                self.assertEqual(commands[0]["sequence"], "*123#")
+
+                result_request = Request(
+                    f"{base_url}/api/v1/agent/commands/{single_command_id}/result",
+                    data=json.dumps({"ok": True}).encode("utf-8"),
+                    headers={**agent_headers, "Content-Type": "application/json"},
+                )
+                with urlopen(result_request, timeout=2) as response:
+                    self.assertEqual(response.status, 200)
+                with urlopen(
+                    Request(
+                        f"{base_url}/api/commands/{single_command_id}",
+                        headers=admin_headers,
+                    ),
+                    timeout=2,
+                ) as response:
+                    command_result = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(command_result["status"], "completed")
+                self.assertEqual(command_result["result"], {"ok": True})
+
+                bulk_request = Request(
+                    f"{base_url}/api/dtmf-commands",
+                    data=json.dumps(
+                        {
+                            "node_ids": [
+                                online_node["node_id"],
+                                offline_node["node_id"],
+                                "f" * 32,
+                            ],
+                            "sequence": "9#",
+                        }
+                    ).encode("utf-8"),
+                    headers={**admin_headers, "Content-Type": "application/json"},
+                )
+                with urlopen(bulk_request, timeout=2) as response:
+                    bulk_result = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(
+                    [result["status"] for result in bulk_result["results"]],
+                    ["pending", "failed", "failed"],
+                )
+                self.assertEqual(
+                    bulk_result["results"][1]["error"],
+                    "Noden är offline. Anslut den innan du skickar kommandon.",
+                )
+                self.assertEqual(
+                    bulk_result["results"][2]["error"], "Noden hittades inte."
+                )
+                bulk_command_id = bulk_result["results"][0]["command_id"]
+                with urlopen(
+                    Request(
+                        f"{base_url}/api/v1/agent/commands",
+                        headers=agent_headers,
+                    ),
+                    timeout=2,
+                ) as response:
+                    bulk_commands = json.loads(response.read().decode("utf-8"))["commands"]
+                self.assertEqual(bulk_commands[0]["id"], bulk_command_id)
+                self.assertEqual(bulk_commands[0]["sequence"], "9#")
+                with database() as connection:
+                    connection.execute(
+                        "UPDATE agent_commands SET updated_at = ? WHERE id = ?",
+                        ("2000-01-01T00:00:00+00:00", bulk_command_id),
+                    )
+                self.assertEqual(claim_agent_commands(online_node["node_id"]), [])
+                with database() as connection:
+                    retried = connection.execute(
+                        "SELECT status FROM agent_commands WHERE id = ?",
+                        (bulk_command_id,),
+                    ).fetchone()
+                self.assertEqual(retried["status"], "expired")
+
+                invalid_request = Request(
+                    f"{base_url}/api/nodes/{online_node['node_id']}/dtmf-commands",
+                    data=json.dumps({"sequence": "12;reboot"}).encode("utf-8"),
+                    headers={**admin_headers, "Content-Type": "application/json"},
+                )
+                with self.assertRaises(HTTPError) as invalid_dtmf:
+                    urlopen(invalid_request, timeout=2)
+                self.assertEqual(invalid_dtmf.exception.code, 400)
             finally:
                 server.shutdown()
                 server.server_close()

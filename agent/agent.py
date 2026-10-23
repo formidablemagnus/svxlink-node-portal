@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -41,21 +42,28 @@ def validate_portal_url(value):
     return value.rstrip("/")
 
 
+def read_config_sections(config_path):
+    sections = {}
+    current_section = None
+    with open(config_path, "r", encoding="utf-8") as config_file:
+        for raw_line in config_file:
+            line = raw_line.strip()
+            if not line or line.startswith(("#", ";")):
+                continue
+            if line.startswith("[") and "]" in line:
+                current_section = line[1:line.index("]")].strip()
+                sections.setdefault(current_section, {})
+            elif current_section and "=" in line:
+                key, value = line.split("=", 1)
+                sections[current_section][key.strip()] = (
+                    value.split("#", 1)[0].split(";", 1)[0].strip()
+                )
+    return sections
+
+
 def read_logic_info(config_path):
     try:
-        sections = {}
-        current_section = None
-        with open(config_path, "r", encoding="utf-8") as config_file:
-            for raw_line in config_file:
-                line = raw_line.strip()
-                if not line or line.startswith(("#", ";")):
-                    continue
-                if line.startswith("[") and "]" in line:
-                    current_section = line[1:line.index("]")].strip()
-                    sections.setdefault(current_section, {})
-                elif current_section and "=" in line:
-                    key, value = line.split("=", 1)
-                    sections[current_section][key.strip()] = value.split("#", 1)[0].split(";", 1)[0].strip()
+        sections = read_config_sections(config_path)
         logic_names = [
             name.strip()
             for name in sections.get("GLOBAL", {}).get("LOGICS", "").split(",")
@@ -195,24 +203,102 @@ def execute_config_command(command):
     return result
 
 
-def process_config_commands(commands_url, results_url, headers):
+def read_dtmf_control_paths(config_path):
+    try:
+        sections = read_config_sections(config_path)
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"Kunde inte läsa SvxLink-konfigurationen: {exc}") from exc
+
+    logic_names = [
+        name.strip().strip("\"'")
+        for name in sections.get("GLOBAL", {}).get("LOGICS", "").split(",")
+        if name.strip()
+    ]
+    paths = []
+    for name in logic_names:
+        path = sections.get(name, {}).get("DTMF_CTRL_PTY", "").strip().strip("\"'")
+        if path and path not in paths:
+            paths.append(path)
+    if not paths:
+        raise ValueError(
+            "Ingen DTMF_CTRL_PTY hittades i logikerna i svxlink.conf."
+        )
+    return paths
+
+
+def execute_dtmf_command(command, config_path):
+    if not isinstance(command, dict) or set(command) != {"id", "action", "sequence"}:
+        raise ValueError("DTMF-kommandot från portalen har ogiltigt format.")
+    command_id = command["id"]
+    sequence = command["sequence"]
+    if not isinstance(command_id, str) or not re.fullmatch(r"[0-9a-f]{32}", command_id):
+        raise ValueError("Ogiltigt ID för DTMF-kommandot.")
+    if (
+        command["action"] != "dtmf"
+        or not isinstance(sequence, str)
+        or not 1 <= len(sequence) <= 64
+        or not re.fullmatch(r"[0-9A-D*#]+", sequence)
+    ):
+        raise ValueError("DTMF-sekvensen från portalen har ogiltigt format.")
+
+    paths = read_dtmf_control_paths(config_path)
+    sent = 0
+    for path in paths:
+        descriptor = None
+        try:
+            flags = (
+                os.O_WRONLY
+                | getattr(os, "O_NONBLOCK", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            descriptor = os.open(path, flags)
+            mode = os.fstat(descriptor).st_mode
+            if not (stat.S_ISCHR(mode) or stat.S_ISFIFO(mode)):
+                raise ValueError(f"DTMF_CTRL_PTY är inte en PTY eller FIFO: {path}")
+            written = os.write(descriptor, sequence.encode("ascii"))
+            if written != len(sequence):
+                raise OSError("Ofullständig skrivning av DTMF-sekvensen.")
+            sent += 1
+        except (OSError, ValueError) as exc:
+            if sent:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"DTMF-sekvensen skickades till {sent} av {len(paths)} "
+                        f"PTY-mål innan ett fel uppstod: {exc}"
+                    ),
+                }
+            return {"ok": False, "error": f"Kunde inte skicka DTMF till {path}: {exc}"}
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+    return {"ok": True}
+
+
+def execute_agent_command(command, config_path):
+    if isinstance(command, dict) and command.get("action") == "dtmf":
+        return execute_dtmf_command(command, config_path)
+    return execute_config_command(command)
+
+
+def process_agent_commands(commands_url, results_url, headers, config_path):
     try:
         response = request_json(commands_url, headers=headers)
         commands = response.get("commands") if isinstance(response, dict) else None
         if not isinstance(commands, list):
             raise ValueError("Portalen returnerade en ogiltig kommandolista.")
     except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
-        logging.warning("Kunde inte hämta konfigurationsåtgärder från portalen: %s", exc)
+        logging.warning("Kunde inte hämta åtgärder från portalen: %s", exc)
         return
 
     for command in commands:
         command_id = command.get("id") if isinstance(command, dict) else None
         if not isinstance(command_id, str):
-            logging.warning("Portalen skickade en konfigurationsåtgärd utan giltigt ID.")
+            logging.warning("Portalen skickade en åtgärd utan giltigt ID.")
             continue
         try:
-            result = execute_config_command(command)
-        except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+            result = execute_agent_command(command, config_path)
+        except (OSError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
             result = {"ok": False, "error": str(exc)}
         try:
             request_json(
@@ -222,19 +308,17 @@ def process_config_commands(commands_url, results_url, headers):
             )
             if result.get("ok"):
                 logging.info(
-                    "Konfigurationsåtgärd %s genomförd för %s.",
+                    "Åtgärd %s genomförd.",
                     command.get("action"),
-                    command.get("document"),
                 )
             else:
                 logging.warning(
-                    "Konfigurationsåtgärd %s för %s misslyckades: %s",
+                    "Åtgärd %s misslyckades: %s",
                     command.get("action"),
-                    command.get("document"),
                     result.get("error", "okänt fel"),
                 )
         except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
-            logging.warning("Kunde inte skicka resultatet av konfigurationsåtgärden: %s", exc)
+            logging.warning("Kunde inte skicka resultatet av åtgärden: %s", exc)
 
 
 def report_status(panel_url, status_url, node_id, config_path, panel_headers, portal_headers):
@@ -277,7 +361,9 @@ def run():
         report_status(
             panel_url, status_url, node_id, config_path, panel_headers, portal_headers
         )
-        process_config_commands(commands_url, results_url, portal_headers)
+        process_agent_commands(
+            commands_url, results_url, portal_headers, config_path
+        )
         time.sleep(interval)
 
 

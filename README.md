@@ -1,9 +1,9 @@
 # SvxLink Node Portal
 
 Central dashboard and outbound node agent for managing multiple SvxLink nodes.
-The first milestone reports service, radio, talkgroup, logic and callsign status;
-node configuration editing is available to portal administrators. Remote
-control is intentionally not enabled.
+The portal reports service, radio, talkgroup, logic and callsign status, lets
+portal administrators edit node configuration, and can send DTMF sequences to
+individual or selected online nodes.
 
 ## Components
 
@@ -122,6 +122,29 @@ configuration. Configuration contents pass through the portal database while
 commands are processed, so keep that database accessible only to the portal
 service account and system administrators.
 
+### Send DTMF commands
+
+The node detail page has a DTMF control for one node. Use **DTMF-styrning** in
+the dashboard to select multiple online nodes and send the same sequence to
+each; the portal shows delivery status separately for every selected node.
+Sequences may contain `0`–`9`, `A`–`D`, `*` and `#`, and are sent exactly as
+entered. Add `#` when the SvxLink command should be executed.
+
+For DTMF control, configure `DTMF_CTRL_PTY` in each SvxLink logic section that
+should receive commands, for example:
+
+```ini
+[RepeaterLogic]
+DTMF_CTRL_PTY=/run/svxlink/repeater_dtmf_ctrl
+```
+
+Use the actual path configured for your installation. The path must be an
+existing PTY or FIFO writable by the `svxlink` account, which also runs the
+portal node agent. Restart SvxLink after changing its configuration. If no
+`DTMF_CTRL_PTY` is configured for an active logic, that node's DTMF request
+will fail with an explanatory result. Nodes must be online and their agent
+must be polling the portal for queued commands to be delivered.
+
 Use `portal` or `agent` when installing on separate servers. If both roles
 should run on the same machine, use `sudo bash ./install.sh both` or run the
 installer interactively without an argument.
@@ -175,6 +198,5 @@ python3 -m unittest discover -s tests -v
 ## Roadmap
 
 1. Add filtering and search for log lines on node detail pages.
-2. Add explicitly authorized remote controls, auditing and portal user
-   management.
+2. Add command auditing and portal user management.
 3. Add documented compatibility checks and a guided reverse-proxy setup.

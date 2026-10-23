@@ -1,4 +1,5 @@
 import json
+import stat
 import tempfile
 import unittest
 from urllib.error import URLError
@@ -9,7 +10,9 @@ from unittest.mock import patch
 from agent.agent import (
     CONFIG_HELPER,
     execute_config_command,
+    execute_dtmf_command,
     make_status,
+    read_dtmf_control_paths,
     read_logic_info,
     report_status,
     validate_portal_url,
@@ -180,6 +183,59 @@ class AgentStatusTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Endast"):
                 execute_config_command(command)
         run_helper.assert_not_called()
+
+    def test_reads_and_deduplicates_configured_dtmf_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "svxlink.conf"
+            config.write_text(
+                "[GLOBAL]\nLOGICS=RepeaterLogic,SimplexLogic\n"
+                "[RepeaterLogic]\nDTMF_CTRL_PTY=/run/svxlink/control\n"
+                "[SimplexLogic]\nDTMF_CTRL_PTY=/run/svxlink/control\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                read_dtmf_control_paths(config), ["/run/svxlink/control"]
+            )
+
+    def test_rejects_missing_dtmf_control_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "svxlink.conf"
+            config.write_text(
+                "[GLOBAL]\nLOGICS=RepeaterLogic\n[RepeaterLogic]\nTYPE=Repeater\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "Ingen DTMF_CTRL_PTY"):
+                read_dtmf_control_paths(config)
+
+    def test_sends_dtmf_sequence_to_configured_fifo(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "svxlink.conf"
+            config.write_text(
+                "[GLOBAL]\nLOGICS=RepeaterLogic\n"
+                "[RepeaterLogic]\nDTMF_CTRL_PTY=/run/svxlink/control\n",
+                encoding="utf-8",
+            )
+            command = {"id": "a" * 32, "action": "dtmf", "sequence": "*123#"}
+            with patch("agent.agent.os.open", return_value=17) as open_path:
+                with patch(
+                    "agent.agent.os.fstat",
+                    return_value=SimpleNamespace(st_mode=stat.S_IFIFO),
+                ):
+                    with patch("agent.agent.os.write", return_value=5) as write:
+                        with patch("agent.agent.os.close") as close:
+                            result = execute_dtmf_command(command, config)
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(open_path.call_args.args[0], "/run/svxlink/control")
+        self.assertEqual(write.call_args.args, (17, b"*123#"))
+        close.assert_called_once_with(17)
+
+    def test_rejects_invalid_dtmf_command_without_opening_path(self):
+        command = {"id": "a" * 32, "action": "dtmf", "sequence": "12;reboot"}
+        with patch("agent.agent.os.open") as open_path:
+            with self.assertRaisesRegex(ValueError, "ogiltigt format"):
+                execute_dtmf_command(command, "/missing/svxlink.conf")
+        open_path.assert_not_called()
 
 
 if __name__ == "__main__":
