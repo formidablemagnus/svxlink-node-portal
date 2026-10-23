@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SvxLink nätverksportal</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/">SvxLink <span>PORTAL</span></a>
+    <nav aria-label="Huvudmeny">
+      <a class="active" href="/">Dashboard</a>
+      <div class="nav-heading">NODER</div>
+      <div id="node-nav" class="node-nav">Läser noder…</div>
+      <a href="#portal-settings">Portalinställningar</a>
+    </nav>
+    <div class="sidebar-footer">Central nodöversikt</div>
+  </aside>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">NÄTVERK</p>
+        <h1>Dashboard</h1>
+        <p class="muted">Status för dina SvxLink-noder</p>
+      </div>
+      <div id="updated" class="muted" role="status" aria-live="polite">Ansluter…</div>
+    </header>
+    <section class="summary" aria-label="Samlad nodstatus">
+      <article><span>NODER</span><strong id="total">—</strong></article>
+      <article><span>ONLINE</span><strong id="online">—</strong></article>
+      <article><span>SÄNDER (TX)</span><strong id="transmitting">—</strong></article>
+      <article><span>MOTTAGAR (RX)</span><strong id="receiving">—</strong></article>
+    </section>
+    <section class="panel">
+      <div class="panel-heading">
+        <div><h2>Noder</h2><p class="muted">Status uppdateras löpande från nodernas agenter.</p></div>
+        <span id="node-count" class="pill">0 noder</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>NOD</th><th>STATUS</th><th>RADIO</th><th>TALGRUPP</th><th>LOGIK</th><th>SENAST SEDD</th></tr></thead>
+          <tbody id="nodes"><tr><td colspan="6" class="muted">Hämtar nodstatus…</td></tr></tbody>
+        </table>
+      </div>
+      <p id="error" class="error" role="status" aria-live="polite"></p>
+    </section>
+    <section id="portal-settings" class="panel settings">
+      <h2>Portalinställningar</h2>
+      <p class="muted">Nodidentiteter skapas på portalservern med kommandot <code>python3 -m portal.server provision-node --name "Nodnamn"</code>. Användarhantering och redigerbara portalinställningar tillkommer i nästa steg.</p>
+    </section>
+    <footer>Offline efter 30 sekunder utan statusrapport. Uppdateras var femte sekund.</footer>
+  </main>
+  <script>
+    const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[char]);
+    const radioNames = {tx: 'TX', rx: 'RX', idle: 'Vila', unknown: 'Okänd'};
+    function renderNodes(nodes) {
+      const nav = document.getElementById('node-nav');
+      const body = document.getElementById('nodes');
+      nav.replaceChildren();
+      if (!nodes.length) nav.textContent = 'Inga registrerade noder';
+      for (const node of nodes) {
+        const navItem = document.createElement('span');
+        navItem.className = 'nav-node';
+        navItem.textContent = node.name;
+        nav.append(navItem);
+      }
+      const online = nodes.filter((node) => node.online);
+      document.getElementById('total').textContent = String(nodes.length);
+      document.getElementById('online').textContent = String(online.length);
+      document.getElementById('transmitting').textContent = String(online.filter((node) => node.status?.radio?.mode === 'tx').length);
+      document.getElementById('receiving').textContent = String(online.filter((node) => node.status?.radio?.mode === 'rx').length);
+      document.getElementById('node-count').textContent = `${nodes.length} ${nodes.length === 1 ? 'nod' : 'noder'}`;
+      if (!nodes.length) {
+        body.innerHTML = '<tr><td colspan="6" class="muted">Inga noder är registrerade ännu.</td></tr>';
+        return;
+      }
+      body.innerHTML = nodes.map((node) => {
+        const status = node.status || {};
+        const radio = status.radio || {};
+        const lastSeen = node.last_seen ? new Date(node.last_seen).toLocaleString('sv-SE') : 'Aldrig';
+        return `<tr>
+          <td><strong>${esc(node.name)}</strong>${status.callsign ? `<small>${esc(status.callsign)}</small>` : ''}</td>
+          <td><span class="state ${node.online ? 'online' : 'offline'}">${node.online ? esc(status.service_status || 'Online') : 'Offline'}</span></td>
+          <td>${esc(radioNames[radio.mode] || 'Okänd')}${radio.mode === 'rx' && Number.isInteger(radio.signal_level) ? `<small>Signal ${esc(radio.signal_level)}%</small>` : ''}</td>
+          <td>${status.current_tg ? `TG ${esc(status.current_tg)}` : 'Okänd'}</td>
+          <td>${esc(status.logic || 'Okänd')}</td>
+          <td>${esc(lastSeen)}</td>
+        </tr>`;
+      }).join('');
+    }
+    async function refresh() {
+      try {
+        const response = await fetch('/api/nodes', {cache: 'no-store'});
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        renderNodes(data.nodes);
+        document.getElementById('error').textContent = '';
+        document.getElementById('updated').textContent = `Uppdaterad ${new Date().toLocaleTimeString('sv-SE')}`;
+      } catch (error) {
+        document.getElementById('error').textContent = `Kunde inte hämta nodstatus: ${error.message}`;
+        document.getElementById('updated').textContent = 'Uppdatering misslyckades';
+      }
+    }
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>
