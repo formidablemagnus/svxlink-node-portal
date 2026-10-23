@@ -14,6 +14,7 @@ from agent.version import read_version
 MAX_TAIL_BYTES = 256 * 1024
 VERSION_RE = re.compile(r"\d+(?:\.\d+)+[0-9A-Za-z.+~_-]*")
 MAX_LINES = 250
+MAX_NODE_INFO_BYTES = 256 * 1024
 MAX_STATE_BUFFER = 65536
 RADIO_EVENTS = ("Rx:sql_state", "Voter:sql_state", "Tx:state")
 TG_EVENT_RE = re.compile(
@@ -74,6 +75,112 @@ def clean_text(value, limit=None):
 
 def _valid_int(value):
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _info_text(value, limit=128):
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return ""
+    return clean_text(str(value), limit)
+
+
+def _info_number(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _info_antennas(value):
+    antennas = []
+    for item in (value if isinstance(value, list) else [])[:8]:
+        if isinstance(item, dict):
+            antennas.append({
+                "comment": _info_text(item.get("comment")),
+                "height": _info_number(item.get("height")),
+                "dir": _info_number(item.get("dir")),
+            })
+    return antennas
+
+
+def _info_ctcss(value):
+    values = value if isinstance(value, list) else [value]
+    return [n for n in (_info_number(v) for v in values[:16]) if n is not None]
+
+
+def _info_devices(value, transmitter):
+    devices = []
+    for key, item in list((value if isinstance(value, dict) else {}).items())[:16]:
+        if not isinstance(item, dict):
+            continue
+        device = {
+            "id": _info_text(key, 16),
+            "name": _info_text(item.get("name")),
+            "freq": _info_number(item.get("freq")),
+            "ctcss": _info_ctcss(item.get("ctcssFreq")),
+            "ants": _info_antennas(item.get("ant")),
+        }
+        if transmitter:
+            device["pwr"] = _info_number(item.get("pwr"))
+        else:
+            device["sql_type"] = _info_text(item.get("sqlType"))
+        devices.append(device)
+    return devices
+
+
+def normalize_node_info(data):
+    """Reduce node_info.json to a bounded, display-only structure."""
+    if not isinstance(data, dict):
+        return None
+    tones = data.get("toneToTalkgroup")
+    qth = []
+    for item in (data.get("qth") if isinstance(data.get("qth"), list) else [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        pos = item.get("pos") if isinstance(item.get("pos"), dict) else {}
+        qth.append({
+            "name": _info_text(item.get("name")),
+            "lat": _info_text(pos.get("lat"), 32),
+            "long": _info_text(pos.get("long"), 32),
+            "loc": _info_text(pos.get("loc"), 16),
+            "rx": _info_devices(item.get("rx"), False),
+            "tx": _info_devices(item.get("tx"), True),
+        })
+    return {
+        "location": _info_text(data.get("nodeLocation")),
+        "node_class": _info_text(data.get("nodeClass"), 32),
+        "hidden": data.get("hidden") if isinstance(data.get("hidden"), bool) else None,
+        "sysop": _info_text(data.get("sysop")),
+        "tone_to_tg": [
+            {"tone": _info_text(tone, 16), "tg": _info_text(tg, 16)}
+            for tone, tg in list((tones if isinstance(tones, dict) else {}).items())[:32]
+        ],
+        "qth": qth,
+    }
+
+
+def read_node_info(path):
+    with open(path, "r", encoding="utf-8") as info_file:
+        raw = info_file.read(MAX_NODE_INFO_BYTES + 1)
+    if len(raw) > MAX_NODE_INFO_BYTES:
+        raise ValueError("node_info.json är för stor.")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        # Hand-edited files often contain trailing commas.
+        data = json.loads(re.sub(r",(\s*[}\]])", r"\1", raw))
+    return bounded_node_info(normalize_node_info(data))
+
+
+def bounded_node_info(info):
+    if info is not None and len(json.dumps(info, ensure_ascii=False).encode("utf-8")) > 48 * 1024:
+        return None
+    return info
 
 
 class RadioState:
@@ -190,6 +297,9 @@ class Collector:
         self._svxlink_version = ""
         self._next_version_check = 0.0
         self._config = {"key": None, "sections": {}, "error": None}
+        self._node_info = {"key": None, "value": None}
+        self._node_info_error = None
+        self.node_info_path = os.path.join(os.path.dirname(config_path), "node_info.json")
         self._pty_checks = []
         self._stop = threading.Event()
         self._log_file = None
@@ -221,6 +331,26 @@ class Collector:
             return sections, None
         except (OSError, UnicodeError) as exc:
             return {}, f"Kunde inte läsa {self.config_path}: {exc}"
+
+    def node_info(self):
+        try:
+            file_stat = os.stat(self.node_info_path)
+            key = (file_stat.st_dev, file_stat.st_ino, file_stat.st_size, file_stat.st_mtime_ns)
+            with self._lock:
+                if key == self._node_info["key"]:
+                    return self._node_info["value"]
+            value = read_node_info(self.node_info_path)
+        except (OSError, UnicodeError, ValueError) as exc:
+            message = f"Kunde inte läsa {self.node_info_path}: {exc}"
+            if message != self._node_info_error:
+                logging.warning(message)
+                self._node_info_error = message
+            key, value = None, None
+        else:
+            self._node_info_error = None
+        with self._lock:
+            self._node_info = {"key": key, "value": value}
+        return value
 
     def radio_snapshot(self):
         with self._lock:
@@ -505,6 +635,7 @@ class Collector:
             "callsign": callsign[:64],
             "radio": radio,
             "logs": logs[-max_logs:],
+            "node_info": self.node_info(),
             "tg_event": tg_event[:128],
             "tg_time": tg_time[:32],
             "monitor_tgs": monitor_tgs,

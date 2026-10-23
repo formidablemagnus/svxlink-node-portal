@@ -17,7 +17,7 @@ from agent.agent import (
     read_logic_info,
     validate_portal_url,
 )
-from agent.collector import Collector, RadioState, parse_state_line
+from agent.collector import Collector, RadioState, normalize_node_info, parse_state_line, read_node_info
 
 
 class AgentStatusTests(unittest.TestCase):
@@ -252,6 +252,36 @@ class AgentStatusTests(unittest.TestCase):
                         {"id": "a" * 32, "action": "service", "operation": operation}
                     )
                 run_invalid.assert_not_called()
+
+
+class NodeInfoTests(unittest.TestCase):
+    EXAMPLE = """{
+  "nodeLocation": "On The road", "nodeClass": "hotspot", "hidden": false,
+  "sysop": "SA7MHN", "toneToTalkgroup": {"79.7": 0},
+  "qth": [{"name": "Mobile", "pos": {"lat": "55.38", "long": "13.15", "loc": "JO65NJ"},
+    "rx": {"B": {"name": "Rx1", "freq": 433.950, "sqlType": "CTCSS | GPIO",
+      "ctcssFreq": [79.7], "ant": [{"comment": "Mobile", "height": 2, "dir": 0}]},},
+    "tx": {"T": {"name": "Tx1", "freq": 433.950, "pwr": 1, "ctcssFreq": 79.7,
+      "ant": [{"comment": "Mobile", "height": 2, "dir": 0}]}}}]
+}"""
+
+    def test_reads_node_info_with_trailing_comma_and_normalizes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "node_info.json"
+            path.write_text(self.EXAMPLE, encoding="utf-8")
+            info = read_node_info(str(path))
+        self.assertEqual(info["sysop"], "SA7MHN")
+        self.assertEqual(info["tone_to_tg"], [{"tone": "79.7", "tg": "0"}])
+        qth = info["qth"][0]
+        self.assertEqual(qth["loc"], "JO65NJ")
+        self.assertEqual(qth["rx"][0]["ctcss"], [79.7])
+        self.assertEqual(qth["rx"][0]["sql_type"], "CTCSS | GPIO")
+        self.assertEqual(qth["tx"][0]["ctcss"], [79.7])
+        self.assertEqual(qth["tx"][0]["pwr"], 1)
+        self.assertEqual(qth["tx"][0]["ants"][0]["height"], 2)
+
+    def test_non_object_node_info_is_ignored(self):
+        self.assertIsNone(normalize_node_info([1, 2]))
 
 
 if __name__ == "__main__":

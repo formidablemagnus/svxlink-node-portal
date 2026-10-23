@@ -118,6 +118,80 @@ document.getElementById('log-clear').addEventListener('click', () => {
   renderLogs();
 });
 
+function infoValue(value, unit) {
+  if (value === null || value === undefined || value === '' || (Array.isArray(value) && !value.length)) return '—';
+  const text = Array.isArray(value) ? value.join(', ') : String(value);
+  return unit ? `${text} ${unit}` : text;
+}
+
+function appendMeta(list, label, value) {
+  const wrapper = document.createElement('div');
+  const dt = document.createElement('dt');
+  const dd = document.createElement('dd');
+  dt.textContent = label;
+  dd.textContent = value;
+  wrapper.append(dt, dd);
+  list.append(wrapper);
+}
+
+function deviceSection(title, devices, transmitter) {
+  const section = document.createElement('div');
+  const heading = document.createElement('h3');
+  heading.textContent = title;
+  section.append(heading);
+  if (!Array.isArray(devices) || !devices.length) {
+    const none = document.createElement('p');
+    none.className = 'muted';
+    none.textContent = 'Inga uppgifter.';
+    section.append(none);
+    return section;
+  }
+  for (const device of devices) {
+    const list = document.createElement('dl');
+    list.className = 'detail-meta';
+    appendMeta(list, 'Namn', infoValue(device.name ? `${device.name} (${device.id})` : device.id));
+    appendMeta(list, 'Frekvens', infoValue(device.freq, 'MHz'));
+    if (transmitter) appendMeta(list, 'Effekt', infoValue(device.pwr, 'W'));
+    else appendMeta(list, 'Squelch', infoValue(device.sql_type));
+    appendMeta(list, 'CTCSS', infoValue(device.ctcss, 'Hz'));
+    const antennas = (device.ants || []).map((ant) => [
+      ant.comment, ant.height !== null && ant.height !== undefined ? `${ant.height} m` : '',
+      ant.dir !== null && ant.dir !== undefined ? `${ant.dir}°` : '',
+    ].filter(Boolean).join(' · ')).filter(Boolean);
+    appendMeta(list, 'Antenn', antennas.length ? antennas.join('; ') : '—');
+    section.append(list);
+  }
+  return section;
+}
+
+function renderNodeInfo(info) {
+  const panel = document.getElementById('node-info-panel');
+  panel.hidden = !info;
+  if (!info) return;
+  const meta = document.getElementById('node-info-meta');
+  meta.replaceChildren();
+  appendMeta(meta, 'Plats', infoValue(info.location));
+  appendMeta(meta, 'Nodtyp', infoValue(info.node_class));
+  appendMeta(meta, 'Sysop', infoValue(info.sysop));
+  appendMeta(meta, 'Dold i listor', info.hidden === null || info.hidden === undefined ? '—' : (info.hidden ? 'Ja' : 'Nej'));
+  appendMeta(meta, 'Ton → talgrupp', (info.tone_to_tg || []).map((t) => `${t.tone} Hz → TG ${t.tg}`).join(', ') || '—');
+  const container = document.getElementById('node-info-qth');
+  container.replaceChildren();
+  for (const qth of info.qth || []) {
+    const block = document.createElement('div');
+    const heading = document.createElement('h3');
+    heading.textContent = `Station: ${qth.name || 'Namnlös'}`;
+    const position = document.createElement('dl');
+    position.className = 'detail-meta';
+    appendMeta(position, 'Latitud', infoValue(qth.lat));
+    appendMeta(position, 'Longitud', infoValue(qth.long));
+    appendMeta(position, 'Lokator', infoValue(qth.loc));
+    block.append(heading, position, deviceSection('Mottagare', qth.rx, false),
+      deviceSection('Sändare', qth.tx, true));
+    container.append(block);
+  }
+}
+
 function renderNode(node) {
   const status = node.status || {};
   const radio = status.radio || {};
@@ -143,6 +217,7 @@ function renderNode(node) {
   if (serviceActive === serviceStatusExpected) serviceStatusExpected = null;
   updateServiceControls();
   allLogs = Array.isArray(status.logs) ? status.logs : [];
+  renderNodeInfo(status.node_info);
   renderLogs();
   document.getElementById('online').className = node.online ? 'online' : 'offline';
   dtmfButton.disabled = !node.online || dtmfSending;

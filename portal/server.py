@@ -43,6 +43,7 @@ USERNAME_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,40}")
 MIN_USER_PASSWORD_LENGTH = 12
 PASSWORD_ITERATIONS = 200_000
 MAX_SCHEDULES = 100
+MAX_NODE_INFO_BYTES = 64 * 1024
 AGENT_COMMAND_TTL_SECONDS = 300
 ONLINE_WINDOW_SECONDS = 30
 CONFIG_DOCUMENTS = {"svxlink.conf", "node_info.json"}
@@ -266,6 +267,12 @@ def validate_status(payload):
     if not isinstance(callsign, str) or len(callsign) > 64:
         raise ValueError("'callsign' måste vara text på högst 64 tecken.")
     radio = validate_radio(payload.get("radio", {}))
+    node_info = payload.get("node_info")
+    if node_info is not None and (
+        not isinstance(node_info, dict)
+        or len(json.dumps(node_info, ensure_ascii=False).encode("utf-8")) > MAX_NODE_INFO_BYTES
+    ):
+        raise ValueError("'node_info' måste vara ett JSON-objekt på högst 64 kB.")
     logs = payload.get("logs", [])
     if not isinstance(logs, list) or len(logs) > MAX_LOG_LINES:
         raise ValueError(f"'logs' måste vara en lista med högst {MAX_LOG_LINES} loggrader.")
@@ -288,6 +295,7 @@ def validate_status(payload):
         "svxlink_version": svxlink_version,
         "radio": radio,
         "logs": logs,
+        "node_info": node_info,
         **validate_status_details(payload),
     }
 

@@ -117,6 +117,16 @@ The log panel can be filtered by free-text search (optionally as a regular
 expression) and by level (errors, warnings, other). Filtering happens in the
 browser on the lines already reported by the node.
 
+### Node information
+
+The agent reads `node_info.json` from the same directory as `svxlink.conf`
+(it must be readable by the `svxlink` account) and reports a bounded,
+display-only summary: location, class, sysop, tone-to-talkgroup mapping and, per
+QTH, position, receivers and transmitters (frequency, squelch, CTCSS, power,
+antennas). The node detail page shows it above the log. Trailing commas in the
+file are tolerated for display. If the file is missing or unreadable the panel
+is hidden.
+
 ### Portal users and command audit
 
 The administrator from `PORTAL_ADMIN_USER`/`PORTAL_ADMIN_PASSWORD` always
