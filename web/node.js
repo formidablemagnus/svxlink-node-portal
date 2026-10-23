@@ -1,4 +1,3 @@
-const radioNames = {tx: 'TX', rx: 'RX', idle: 'Vila', unknown: 'Okänd'};
 const nodeId = window.location.pathname.split('/').filter(Boolean).pop();
 const setText = (id, value) => { document.getElementById(id).textContent = value; };
 document.getElementById('config-link').href = `/nodes/${encodeURIComponent(nodeId)}/config`;
@@ -24,11 +23,13 @@ function updateServiceControls() {
 }
 
 function renderRadio(radio) {
-  const mode = radioNames[radio.mode] || 'Okänd';
-  const radioDot = document.getElementById('radio');
-  radioDot.className = `status-dot radio-${radio.mode in radioNames ? radio.mode : 'unknown'}`;
-  radioDot.title = mode;
-  radioDot.setAttribute('aria-label', `Radio: ${mode}`);
+  for (const [key, label, activeText, activeClass] of [['tx', 'TX', 'sänder', 'radio-tx'], ['rx', 'RX', 'tar emot', 'radio-rx']]) {
+    const active = radio.mode === key;
+    const dot = document.getElementById(`radio-${key}`);
+    dot.className = `status-dot ${active ? activeClass : 'radio-off'}`;
+    dot.setAttribute('aria-label', `${label}: ${active ? activeText : 'passiv'}`);
+    setText(`radio-${key}-text`, `${label} ${active ? activeText : 'passiv'}`);
+  }
   const level = Number.isInteger(radio.signal_level) ? Math.min(100, Math.max(0, radio.signal_level)) : 0;
   const bar = document.getElementById('signal-level');
   bar.style.width = `${level}%`;

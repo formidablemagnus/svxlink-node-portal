@@ -17,8 +17,8 @@
       </div>
       <div class="header-actions">
         <span class="status-icons">
-          <span id="online" class="status-dot offline" role="img" aria-label="Nodanslutning: okänd" title="Nodanslutning: okänd"></span>
-          <span id="service" class="status-dot offline" role="img" aria-label="SvxLink-tjänst: okänd" title="SvxLink-tjänst: okänd"></span>
+          <span class="status-item"><span id="online" class="status-dot offline" role="img" aria-label="Nodanslutning: okänd" title="Nodanslutning: okänd"></span><small>Nod</small></span>
+          <span class="status-item"><span id="service" class="status-dot offline" role="img" aria-label="SvxLink-tjänst: okänd" title="SvxLink-tjänst: okänd"></span><small>SvxLink</small></span>
         </span>
         <div id="updated" class="muted" role="status" aria-live="polite">Ansluter…</div>
         <a id="schedules-link" class="button-link" href="#">Schemaläggning</a>
@@ -32,7 +32,10 @@
       </div>
       <div class="node-details compact">
         <div class="detail-card"><span>Aktiv talgrupp</span><strong id="talkgroup">Okänd</strong></div>
-        <div class="detail-card"><span>Radio</span><strong><span id="radio" class="status-dot radio-unknown" role="img" aria-label="Radio: Okänd" title="Okänd"></span></strong></div>
+        <div class="detail-card"><span>Radio</span><strong class="radio-states">
+          <span class="status-item"><span id="radio-tx" class="status-dot radio-off" role="img" aria-label="TX: passiv"></span><small id="radio-tx-text">TX passiv</small></span>
+          <span class="status-item"><span id="radio-rx" class="status-dot radio-off" role="img" aria-label="RX: passiv"></span><small id="radio-rx-text">RX passiv</small></span>
+        </strong></div>
         <div class="detail-card"><span>Signalstyrka</span><div class="signal-bar" role="meter" aria-label="Signalstyrka" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="signal-level"></div></div></div>
         <div class="detail-card"><span>SvxLink-logik</span><strong id="logic">Okänd</strong></div>
         <div class="detail-card"><span>Senaste talare</span><strong id="tg-event">Okänd</strong></div>

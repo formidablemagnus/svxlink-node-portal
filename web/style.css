@@ -69,7 +69,10 @@ td a:hover { color: var(--blue); text-decoration: underline; }
 .status-dot.radio-tx { background: #e5484d; }
 .status-dot.radio-rx { background: #f5c518; }
 .status-dot.radio-idle { background: var(--green); }
-.status-dot.radio-unknown { background: var(--muted); }
+.status-dot.radio-off { background: var(--muted); }
+.status-item { display: inline-flex; align-items: center; gap: 5px; }
+.status-item small { font-size: 11px; color: var(--muted); font-weight: 400; }
+.radio-states { display: flex; gap: 16px; }
 .signal-bar { height: 12px; margin-top: 8px; border-radius: 6px; background: var(--line); overflow: hidden; }
 .signal-bar > div { height: 100%; width: 0; background: var(--green); transition: width .3s; }
 .online { color: var(--green); }
