@@ -2,7 +2,8 @@
 
 Central dashboard and outbound node agent for managing multiple SvxLink nodes.
 The first milestone reports service, radio, talkgroup, logic and callsign status;
-remote control and editing are intentionally not enabled yet.
+node configuration editing is available to portal administrators. Remote
+control is intentionally not enabled.
 
 ## Components
 
@@ -100,6 +101,25 @@ those nodes (for example `0.0.0.0`) and restrict port 8080 with the server
 firewall to trusted node addresses. Restart the portal service after changing
 its settings.
 
+### Edit node configuration
+
+The node detail page lets portal administrators read and edit
+`/etc/svxlink/svxlink.conf` and `/etc/svxlink/node_info.json`. The node must be
+online to process an edit request. Each save creates a timestamped backup
+beside the original file and preserves its owner and mode. A checksum check
+prevents saving if the file changed after it was loaded; reload it and reapply
+your edits in that case. `node_info.json` must remain valid JSON. Saving does
+not restart SvxLink; restart it manually when required.
+
+The agent installer installs a root-owned helper limited to those two fixed
+paths and a sudoers rule allowing the `svxlink` account to run only that
+helper. The agent systemd service therefore allows the helper's controlled
+privilege elevation. Keep portal access restricted to trusted administrators
+and prefer HTTPS: an authorized portal user can change the node's SvxLink
+configuration. Configuration contents pass through the portal database while
+commands are processed, so keep that database accessible only to the portal
+service account and system administrators.
+
 Use `portal` or `agent` when installing on separate servers. If both roles
 should run on the same machine, use `sudo bash ./install.sh both` or run the
 installer interactively without an argument.
@@ -153,6 +173,6 @@ python3 -m unittest discover -s tests -v
 ## Roadmap
 
 1. Add filtering and search for log lines on node detail pages.
-2. Add explicitly authorized remote controls, configuration editing,
-   auditing and portal user management.
+2. Add explicitly authorized remote controls, auditing and portal user
+   management.
 3. Add documented compatibility checks and a guided reverse-proxy setup.

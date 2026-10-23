@@ -86,6 +86,32 @@ install_service() {
   install -o root -g root -m 0644 "$source" "$SYSTEMD_DIR/$name"
 }
 
+install_agent_config_helper() {
+  local source="$SCRIPT_DIR/config_helper.py"
+  local helper="/usr/local/libexec/svxlink-node-portal-config"
+  local sudoers="/etc/sudoers.d/svxlink-node-portal-agent"
+  if [[ ! -f "$source" ]]; then
+    say_error "Konfigurationshjälpen saknas: $source"
+    exit 1
+  fi
+  if ! command -v visudo >/dev/null 2>&1; then
+    say_error "visudo saknas. Installera sudo innan du installerar nodagenten."
+    exit 1
+  fi
+  install -d -o root -g root -m 0755 /usr/local/libexec
+  install -o root -g root -m 0755 "$source" "$helper"
+  local sudoers_tmp
+  sudoers_tmp="$(mktemp /etc/sudoers.d/svxlink-node-portal-agent.XXXXXX)"
+  printf '%s\n' 'svxlink ALL=(root) NOPASSWD: /usr/local/libexec/svxlink-node-portal-config' > "$sudoers_tmp"
+  chmod 0440 "$sudoers_tmp"
+  if ! visudo -cf "$sudoers_tmp"; then
+    rm -f "$sudoers_tmp"
+    say_error "Sudoers-regeln för konfigurationshjälpen är ogiltig."
+    exit 1
+  fi
+  mv "$sudoers_tmp" "$sudoers"
+}
+
 create_portal_environment() {
   if [[ -e "$PORTAL_ENV" ]]; then
     printf 'Behåller befintlig konfiguration: %s\n' "$PORTAL_ENV"
@@ -233,7 +259,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   say_error "Python 3 saknas. Installera python3 och kör scriptet igen."
   exit 1
 fi
-if [[ ! -f "$SCRIPT_DIR/portal/server.py" || ! -f "$SCRIPT_DIR/agent/agent.py" || ! -f "$SCRIPT_DIR/web/index.html" ]]; then
+if [[ ! -f "$SCRIPT_DIR/portal/server.py" || ! -f "$SCRIPT_DIR/agent/agent.py" || ! -f "$SCRIPT_DIR/config_helper.py" || ! -f "$SCRIPT_DIR/web/index.html" ]]; then
   say_error "Kör installationsscriptet från en komplett checkout av svxlink-node-portal."
   exit 1
 fi
@@ -260,6 +286,7 @@ case "$ROLE" in
     ;;
   agent)
     install_component agent
+    install_agent_config_helper
     create_agent_environment
     install_service svxlink-node-agent.service
     ;;
@@ -275,6 +302,7 @@ case "$ROLE" in
     install_component portal
     install_component web
     install_component agent
+    install_agent_config_helper
     create_portal_environment
     create_agent_environment
     install_service svxlink-node-portal.service

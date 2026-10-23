@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import os
 import tempfile
@@ -11,7 +12,7 @@ from urllib.request import Request, urlopen
 
 from http.server import ThreadingHTTPServer
 
-from portal.server import PortalHandler, provision_node, validate_status
+from portal.server import PortalHandler, database, provision_node, validate_status
 
 
 class PortalStatusTests(unittest.TestCase):
@@ -93,6 +94,24 @@ class PortalStatusTests(unittest.TestCase):
                     self.assertEqual(response.status, 200)
 
                 credentials = base64.b64encode(b"admin:this-is-a-long-test-password").decode()
+                with self.assertRaises(HTTPError) as unauthenticated_agent:
+                    urlopen(
+                        Request(f"{base_url}/api/v1/agent/commands"),
+                        timeout=2,
+                    )
+                self.assertEqual(unauthenticated_agent.exception.code, 401)
+
+                unauthorized_config_request = Request(
+                    f"{base_url}/api/nodes/{node['node_id']}/config-commands",
+                    data=json.dumps(
+                        {"action": "read", "document": "svxlink.conf"}
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                with self.assertRaises(HTTPError) as unauthenticated_admin:
+                    urlopen(unauthorized_config_request, timeout=2)
+                self.assertEqual(unauthenticated_admin.exception.code, 401)
+
                 dashboard_request = Request(
                     f"{base_url}/api/nodes",
                     headers={"Authorization": f"Basic {credentials}"},
@@ -124,6 +143,80 @@ class PortalStatusTests(unittest.TestCase):
                 with urlopen(page_request, timeout=2) as response:
                     self.assertEqual(response.status, 200)
                     self.assertIn("Radiostatus", response.read().decode("utf-8"))
+
+                read_command_request = Request(
+                    f"{base_url}/api/nodes/{node['node_id']}/config-commands",
+                    data=json.dumps(
+                        {"action": "read", "document": "svxlink.conf"}
+                    ).encode("utf-8"),
+                    headers={
+                        "Authorization": f"Basic {credentials}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                with urlopen(read_command_request, timeout=2) as response:
+                    command_id = json.loads(response.read().decode("utf-8"))["command_id"]
+
+                agent_headers = {"Authorization": f"Bearer {node['token']}"}
+                with urlopen(
+                    Request(f"{base_url}/api/v1/agent/commands", headers=agent_headers),
+                    timeout=2,
+                ) as response:
+                    commands = json.loads(response.read().decode("utf-8"))["commands"]
+                self.assertEqual(commands[0]["id"], command_id)
+                self.assertEqual(commands[0]["document"], "svxlink.conf")
+
+                config_content = "[GLOBAL]\nLOGICS=RepeaterLogic\n"
+                read_result = {
+                    "ok": True,
+                    "document": "svxlink.conf",
+                    "content": config_content,
+                    "sha256": hashlib.sha256(config_content.encode("utf-8")).hexdigest(),
+                }
+                result_request = Request(
+                    f"{base_url}/api/v1/agent/commands/{command_id}/result",
+                    data=json.dumps(read_result).encode("utf-8"),
+                    headers={**agent_headers, "Content-Type": "application/json"},
+                )
+                with urlopen(result_request, timeout=2) as response:
+                    self.assertEqual(response.status, 200)
+
+                config_result_request = Request(
+                    f"{base_url}/api/config-commands/{command_id}",
+                    headers={"Authorization": f"Basic {credentials}"},
+                )
+                with urlopen(config_result_request, timeout=2) as response:
+                    config_result = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(config_result["status"], "completed")
+                self.assertEqual(config_result["result"]["content"], config_content)
+
+                bad_config_request = Request(
+                    f"{base_url}/api/nodes/{node['node_id']}/config-commands",
+                    data=json.dumps(
+                        {
+                            "action": "write",
+                            "document": "node_info.json",
+                            "content": "{invalid",
+                            "sha256": "0" * 64,
+                        }
+                    ).encode("utf-8"),
+                    headers={
+                        "Authorization": f"Basic {credentials}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                with self.assertRaises(HTTPError) as invalid_config:
+                    urlopen(bad_config_request, timeout=2)
+                self.assertEqual(invalid_config.exception.code, 400)
+
+                with database() as connection:
+                    connection.execute(
+                        "UPDATE nodes SET last_seen = ? WHERE id = ?",
+                        ("2000-01-01T00:00:00+00:00", node["node_id"]),
+                    )
+                with self.assertRaises(HTTPError) as offline_node:
+                    urlopen(read_command_request, timeout=2)
+                self.assertEqual(offline_node.exception.code, 409)
 
                 with self.assertRaises(HTTPError) as missing_node:
                     urlopen(

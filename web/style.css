@@ -64,6 +64,16 @@ td a:hover { color: var(--blue); text-decoration: underline; }
 .log-lines li { padding: 7px 10px; border-bottom: 1px solid #292929; color: #ddd; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; white-space: pre-wrap; }
 .log-lines li:last-child { border-bottom: 0; }
 .log-lines li.muted { color: var(--muted); font-family: inherit; }
+.config-editor { margin-top: 20px; }
+.config-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 9px; }
+.config-editor-heading h3 { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.config-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+button { padding: 8px 12px; border: 1px solid #4b4b4b; border-radius: 6px; background: #303030; color: var(--text); font: inherit; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--blue); }
+button:disabled { opacity: .55; cursor: not-allowed; }
+.config-editor textarea { display: block; width: 100%; min-height: 220px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: #151515; color: var(--text); font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; resize: vertical; }
+.config-editor textarea:disabled { opacity: .7; }
+.editor-status { min-height: 1.5em; margin: 6px 0 0; overflow-wrap: anywhere; }
 code { color: #b7c8ff; overflow-wrap: anywhere; }
 footer { padding: 0 3px; color: var(--muted); font-size: 12px; }
 @media (max-width: 900px) {
@@ -80,6 +90,7 @@ footer { padding: 0 3px; color: var(--muted); font-size: 12px; }
   main { margin: 0; padding: 22px 13px; }
   h1 { font-size: 23px; }
   .panel { padding: 14px; }
+  .config-editor-heading { align-items: flex-start; flex-direction: column; }
   th, td { padding: 10px 8px; }
   .node-details, .detail-meta { grid-template-columns: 1fr; }
 }

@@ -4,6 +4,8 @@ import base64
 import json
 import logging
 import os
+import re
+import subprocess
 import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -13,6 +15,9 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 MAX_LOG_LINES = 50
 MAX_LOG_LINE_BYTES = 512
+MAX_CONFIG_BYTES = 2 * 1024 * 1024
+CONFIG_DOCUMENTS = {"svxlink.conf", "node_info.json"}
+CONFIG_HELPER = "/usr/local/libexec/svxlink-node-portal-config"
 
 
 def required_environment(name):
@@ -129,6 +134,109 @@ class RejectRedirects(HTTPRedirectHandler):
         return None
 
 
+def execute_config_command(command):
+    if not isinstance(command, dict):
+        raise ValueError("Konfigurationsåtgärden måste vara ett JSON-objekt.")
+    action = command.get("action")
+    document = command.get("document")
+    if not isinstance(document, str) or document not in CONFIG_DOCUMENTS:
+        raise ValueError("Endast svxlink.conf och node_info.json kan ändras.")
+    if not isinstance(action, str) or action not in ("read", "write"):
+        raise ValueError("Ogiltig konfigurationsåtgärd från portalen.")
+    if action == "read" and set(command) != {"id", "action", "document"}:
+        raise ValueError("Läsbegäran från portalen har ogiltigt format.")
+    if action == "write":
+        if set(command) != {"id", "action", "document", "content", "sha256"}:
+            raise ValueError("Skrivbegäran från portalen har ogiltigt format.")
+        content = command["content"]
+        if not isinstance(content, str):
+            raise ValueError("Konfigurationen är ogiltig eller större än 2 MB.")
+        try:
+            if len(content.encode("utf-8")) > MAX_CONFIG_BYTES:
+                raise ValueError("Konfigurationen är ogiltig eller större än 2 MB.")
+        except UnicodeEncodeError as exc:
+            raise ValueError("Konfigurationen måste innehålla giltig Unicode-text.") from exc
+        if document == "node_info.json":
+            json.loads(content, parse_constant=reject_json_constant)
+        checksum = command["sha256"]
+        if not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
+            raise ValueError("Ogiltig kontrollsumma för konfigurationen.")
+    command_id = command.get("id")
+    if not isinstance(command_id, str) or not re.fullmatch(r"[0-9a-f]{32}", command_id):
+        raise ValueError("Ogiltigt ID för konfigurationsåtgärden.")
+
+    try:
+        process = subprocess.run(
+            ["sudo", "-n", CONFIG_HELPER],
+            input=json.dumps(
+                {key: value for key, value in command.items() if key != "id"},
+                ensure_ascii=False,
+            ).encode("utf-8"),
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "Tidsgränsen överskreds vid filåtkomst."}
+    except OSError as exc:
+        return {"ok": False, "error": f"Kunde inte starta konfigurationshjälpen: {exc}"}
+    try:
+        result = json.loads(process.stdout.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        detail = process.stderr.decode("utf-8", errors="replace").strip()
+        return {
+            "ok": False,
+            "error": f"Konfigurationshjälpen returnerade ett ogiltigt svar: {detail or exc}",
+        }
+    if process.returncode != 0 and (not isinstance(result, dict) or result.get("ok") is not False):
+        return {"ok": False, "error": "Konfigurationshjälpen misslyckades."}
+    if not isinstance(result, dict) or type(result.get("ok")) is not bool:
+        return {"ok": False, "error": "Konfigurationshjälpen returnerade ett ogiltigt svar."}
+    return result
+
+
+def process_config_commands(commands_url, results_url, headers):
+    try:
+        response = request_json(commands_url, headers=headers)
+        commands = response.get("commands") if isinstance(response, dict) else None
+        if not isinstance(commands, list):
+            raise ValueError("Portalen returnerade en ogiltig kommandolista.")
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+        logging.warning("Kunde inte hämta konfigurationsåtgärder från portalen: %s", exc)
+        return
+
+    for command in commands:
+        command_id = command.get("id") if isinstance(command, dict) else None
+        if not isinstance(command_id, str):
+            logging.warning("Portalen skickade en konfigurationsåtgärd utan giltigt ID.")
+            continue
+        try:
+            result = execute_config_command(command)
+        except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+            result = {"ok": False, "error": str(exc)}
+        try:
+            request_json(
+                f"{results_url}/{command_id}/result",
+                payload=result,
+                headers=headers,
+            )
+            if result.get("ok"):
+                logging.info(
+                    "Konfigurationsåtgärd %s genomförd för %s.",
+                    command.get("action"),
+                    command.get("document"),
+                )
+            else:
+                logging.warning(
+                    "Konfigurationsåtgärd %s för %s misslyckades: %s",
+                    command.get("action"),
+                    command.get("document"),
+                    result.get("error", "okänt fel"),
+                )
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+            logging.warning("Kunde inte skicka resultatet av konfigurationsåtgärden: %s", exc)
+
+
 def report_status(panel_url, status_url, node_id, config_path, panel_headers, portal_headers):
     try:
         local_status = request_json(panel_url, headers=panel_headers)
@@ -162,11 +270,14 @@ def run():
     portal_headers = {"Authorization": f"Bearer {token}"}
     panel_headers = {"Authorization": f"Basic {panel_auth}"}
     status_url = f"{portal_url}/api/v1/agent/status"
+    commands_url = f"{portal_url}/api/v1/agent/commands"
+    results_url = commands_url
 
     while True:
         report_status(
             panel_url, status_url, node_id, config_path, panel_headers, portal_headers
         )
+        process_config_commands(commands_url, results_url, portal_headers)
         time.sleep(interval)
 
 

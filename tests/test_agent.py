@@ -1,10 +1,19 @@
+import json
 import tempfile
 import unittest
 from urllib.error import URLError
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from agent.agent import make_status, read_logic_info, report_status, validate_portal_url
+from agent.agent import (
+    CONFIG_HELPER,
+    execute_config_command,
+    make_status,
+    read_logic_info,
+    report_status,
+    validate_portal_url,
+)
 
 
 class AgentStatusTests(unittest.TestCase):
@@ -134,6 +143,43 @@ class AgentStatusTests(unittest.TestCase):
 
         self.assertFalse(reported)
         self.assertIn("portalen", warning.call_args.args[0])
+
+    def test_config_command_uses_fixed_privileged_helper(self):
+        command = {
+            "id": "a" * 32,
+            "action": "read",
+            "document": "svxlink.conf",
+        }
+        helper_result = {
+            "ok": True,
+            "document": "svxlink.conf",
+            "content": "[GLOBAL]\n",
+            "sha256": "b" * 64,
+        }
+        with patch(
+            "agent.agent.subprocess.run",
+            return_value=SimpleNamespace(
+                returncode=0,
+                stdout=(json.dumps(helper_result) + "\n").encode(),
+                stderr=b"",
+            ),
+        ) as run_helper:
+            result = execute_config_command(command)
+
+        self.assertEqual(result, helper_result)
+        self.assertEqual(run_helper.call_args.args[0], ["sudo", "-n", CONFIG_HELPER])
+        self.assertNotIn('"id"', run_helper.call_args.kwargs["input"].decode())
+
+    def test_rejects_arbitrary_config_path_before_privilege_escalation(self):
+        command = {
+            "id": "a" * 32,
+            "action": "read",
+            "document": "../../etc/passwd",
+        }
+        with patch("agent.agent.subprocess.run") as run_helper:
+            with self.assertRaisesRegex(ValueError, "Endast"):
+                execute_config_command(command)
+        run_helper.assert_not_called()
 
 
 if __name__ == "__main__":
