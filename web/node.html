@@ -73,6 +73,9 @@
         <p id="dtmf-help" class="muted">Tillåtna tecken: 0–9, A–D, * och #. Lägg till # om kommandot ska avslutas.</p>
         <p id="dtmf-status" class="editor-status" role="status" aria-live="polite"></p>
       </form>
+      <h3>Snabbknappar</h3>
+      <div id="dtmf-presets" class="preset-buttons"><span class="muted">Laddar knappar…</span></div>
+      <p class="muted">Knapparna är gemensamma för alla noder och hanteras under <a href="/dtmf">DTMF-styrning</a>.</p>
     </section>
     <section class="panel">
       <div class="panel-heading">
@@ -135,6 +138,7 @@
       setText('log-count', `${logs.length} ${logs.length === 1 ? 'rad' : 'rader'}`);
       document.getElementById('online').className = node.online ? 'online' : 'offline';
       dtmfButton.disabled = !node.online || dtmfSending;
+      setPresetsDisabled(!node.online || dtmfSending);
       document.getElementById('error').textContent = node.online
         ? ''
         : 'Noden är offline. Visade statusvärden kommer från den senaste rapporten.';
@@ -154,29 +158,64 @@
       throw new Error('Nodagenten har ännu inte bekräftat åtgärden.');
     }
 
-    dtmfForm.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      if (!dtmfForm.reportValidity()) return;
+    const presetContainer = document.getElementById('dtmf-presets');
+
+    function setPresetsDisabled(disabled) {
+      for (const button of presetContainer.querySelectorAll('button')) button.disabled = disabled;
+    }
+
+    async function sendDtmf(sequence) {
       dtmfSending = true;
       dtmfButton.disabled = true;
+      setPresetsDisabled(true);
       dtmfStatus.textContent = 'Skickar DTMF-sekvens…';
       try {
         const response = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}/dtmf-commands`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({sequence: dtmfInput.value})
+          body: JSON.stringify({sequence})
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
         dtmfStatus.textContent = await waitForCommand(data.command_id);
-        dtmfInput.value = '';
+        return true;
       } catch (error) {
         dtmfStatus.textContent = `DTMF kunde inte skickas: ${error.message}`;
+        return false;
       } finally {
         dtmfSending = false;
-        dtmfButton.disabled = !document.getElementById('online').classList.contains('online');
+        const online = document.getElementById('online').classList.contains('online');
+        dtmfButton.disabled = !online;
+        setPresetsDisabled(!online);
       }
+    }
+
+    dtmfForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!dtmfForm.reportValidity()) return;
+      if (await sendDtmf(dtmfInput.value)) dtmfInput.value = '';
     });
+
+    async function loadPresets() {
+      try {
+        const response = await fetch('/api/dtmf-buttons', {cache: 'no-store'});
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        presetContainer.replaceChildren();
+        for (const preset of data.buttons) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = preset.label;
+          button.title = preset.sequence;
+          button.disabled = !document.getElementById('online').classList.contains('online');
+          button.addEventListener('click', () => sendDtmf(preset.sequence));
+          presetContainer.append(button);
+        }
+        if (!data.buttons.length) presetContainer.textContent = 'Inga snabbknappar har skapats ännu.';
+      } catch (error) {
+        presetContainer.textContent = `Kunde inte läsa snabbknappar: ${error.message}`;
+      }
+    }
 
     async function refresh() {
       try {
@@ -211,6 +250,7 @@
       }
     }
     loadNodeNavigation();
+    loadPresets();
     refresh();
     setInterval(refresh, 5000);
   </script>

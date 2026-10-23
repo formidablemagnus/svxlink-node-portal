@@ -30,6 +30,7 @@ MAX_COMMAND_REQUEST_BYTES = MAX_CONFIG_BYTES * 6 + 65536
 MAX_COMMAND_RESULT_BYTES = MAX_CONFIG_BYTES * 6 + 65536
 MAX_DTMF_SEQUENCE_LENGTH = 64
 MAX_DTMF_NODES = 100
+MAX_DTMF_BUTTONS = 30
 AGENT_COMMAND_TTL_SECONDS = 300
 ONLINE_WINDOW_SECONDS = 30
 CONFIG_DOCUMENTS = {"svxlink.conf", "node_info.json"}
@@ -71,6 +72,13 @@ def connect_database():
             result_json TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        )"""
+    )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS dtmf_buttons (
+            position INTEGER PRIMARY KEY,
+            label TEXT NOT NULL,
+            sequence TEXT NOT NULL
         )"""
     )
     connection.execute(
@@ -272,6 +280,43 @@ def validate_dtmf_command(payload):
             "från 0–9, A–D, * och #."
         )
     return {"action": "dtmf", "sequence": sequence}
+
+
+def validate_dtmf_buttons(payload):
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"buttons"}
+        or not isinstance(payload["buttons"], list)
+        or len(payload["buttons"]) > MAX_DTMF_BUTTONS
+    ):
+        raise ValueError(f"Ange högst {MAX_DTMF_BUTTONS} knappar.")
+    buttons = []
+    for item in payload["buttons"]:
+        if not isinstance(item, dict) or set(item) != {"label", "sequence"}:
+            raise ValueError("Ogiltig knappdefinition.")
+        label = item["label"]
+        if not isinstance(label, str) or not 1 <= len(label.strip()) <= 40:
+            raise ValueError("Knappnamn måste vara 1–40 tecken.")
+        command = validate_dtmf_command({"action": "dtmf", "sequence": item["sequence"]})
+        buttons.append({"label": label.strip(), "sequence": command["sequence"]})
+    return buttons
+
+
+def list_dtmf_buttons():
+    with database() as connection:
+        rows = connection.execute(
+            "SELECT label, sequence FROM dtmf_buttons ORDER BY position"
+        ).fetchall()
+    return [{"label": row["label"], "sequence": row["sequence"]} for row in rows]
+
+
+def replace_dtmf_buttons(buttons):
+    with database() as connection:
+        connection.execute("DELETE FROM dtmf_buttons")
+        connection.executemany(
+            "INSERT INTO dtmf_buttons (position, label, sequence) VALUES (?, ?, ?)",
+            [(index, b["label"], b["sequence"]) for index, b in enumerate(buttons)],
+        )
 
 
 def validate_agent_command(payload):
@@ -581,6 +626,8 @@ class PortalHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif path == "/api/dtmf-buttons":
+            self.send_json(200, {"buttons": list_dtmf_buttons()})
         elif path == "/api/nodes":
             self.send_json(200, {"nodes": node_rows()})
         elif path.startswith("/api/nodes/"):
@@ -615,6 +662,17 @@ class PortalHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/api/dtmf-buttons":
+            if not self.require_admin():
+                return
+            try:
+                buttons = validate_dtmf_buttons(self.read_json_body(MAX_REQUEST_BYTES))
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            replace_dtmf_buttons(buttons)
+            self.send_json(200, {"buttons": buttons})
+            return
         if path == "/api/dtmf-commands":
             if not self.require_admin():
                 return

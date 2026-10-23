@@ -130,6 +130,12 @@ each; the portal shows delivery status separately for every selected node.
 Sequences may contain `0`–`9`, `A`–`D`, `*` and `#`, and are sent exactly as
 entered. Add `#` when the SvxLink command should be executed.
 
+Preset buttons ("Snabbknappar") are global for all nodes and stored in the
+portal database (up to 30, name 1–40 characters). Create and delete them on the
+**DTMF-styrning** page. On a node's detail page a button sends its sequence to
+that node; on the multi-node page it sends to the selected nodes after a
+confirmation.
+
 For DTMF control, configure `DTMF_CTRL_PTY` in each SvxLink logic section that
 should receive commands, for example:
 

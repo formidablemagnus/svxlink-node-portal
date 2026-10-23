@@ -55,6 +55,22 @@
       </form>
     </section>
     <section class="panel">
+      <h2>Snabbknappar</h2>
+      <p class="muted">Gemensamma för alla noder. Ett klick skickar sekvensen till de valda noderna efter bekräftelse.</p>
+      <div id="dtmf-presets" class="preset-buttons"><span class="muted">Laddar knappar…</span></div>
+      <h3>Hantera knappar</h3>
+      <ul id="preset-editor" class="preset-editor"></ul>
+      <form id="preset-form" class="dtmf-form">
+        <div class="dtmf-controls">
+          <input id="preset-label" type="text" maxlength="40" placeholder="Namn, t.ex. TG 240" aria-label="Knappnamn" required>
+          <input id="preset-sequence" type="text" maxlength="64" pattern="[0-9A-D*#]{1,64}"
+            placeholder="Sekvens, t.ex. 91240#" aria-label="DTMF-sekvens" autocomplete="off" required>
+          <button type="submit">Lägg till knapp</button>
+        </div>
+        <p id="preset-status" class="editor-status" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+    <section class="panel">
       <div class="panel-heading">
         <div><h2>Resultat</h2><p class="muted">Status visas separat för varje nod.</p></div>
       </div>
@@ -157,23 +173,22 @@
       updateSelection();
     });
 
-    form.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      if (!form.reportValidity()) return;
+    async function sendToSelected(sequence) {
       const nodeIds = Array.from(
         picker.querySelectorAll('input[type="checkbox"]:checked'),
         (checkbox) => checkbox.value
       );
-      if (!nodeIds.length || nodeIds.length > 100) return;
+      if (!nodeIds.length || nodeIds.length > 100) return false;
       sending = true;
       sendButton.disabled = true;
+      setPresetsDisabled(true);
       status.textContent = `Skickar till ${nodeIds.length} ${nodeIds.length === 1 ? 'nod' : 'noder'}…`;
       resultList.replaceChildren();
       try {
         const response = await fetch('/api/dtmf-commands', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({node_ids: nodeIds, sequence: input.value})
+          body: JSON.stringify({node_ids: nodeIds, sequence})
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
@@ -198,16 +213,115 @@
           }
         }));
         status.textContent = 'Bearbetningen är klar. Se resultat per nod.';
-        input.value = '';
+        return true;
       } catch (error) {
         status.textContent = `DTMF kunde inte skickas: ${error.message}`;
+        return false;
       } finally {
         sending = false;
         updateSelection();
       }
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!form.reportValidity()) return;
+      if (await sendToSelected(input.value)) input.value = '';
     });
 
+    const presetContainer = document.getElementById('dtmf-presets');
+    const presetStatus = document.getElementById('preset-status');
+    const editor = document.getElementById('preset-editor');
+    let presets = [];
+
+    function setPresetsDisabled(disabled) {
+      for (const button of presetContainer.querySelectorAll('button')) button.disabled = disabled;
+    }
+
+    function renderPresets() {
+      presetContainer.replaceChildren();
+      for (const preset of presets) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = preset.label;
+        button.title = preset.sequence;
+        button.addEventListener('click', () => {
+          const count = picker.querySelectorAll('input[type="checkbox"]:checked').length;
+          if (!count) {
+            status.textContent = 'Välj minst en nod först.';
+            return;
+          }
+          if (window.confirm(`Skicka "${preset.label}" (${preset.sequence}) till ${count} valda noder?`)) {
+            sendToSelected(preset.sequence);
+          }
+        });
+        presetContainer.append(button);
+      }
+      if (!presets.length) presetContainer.textContent = 'Inga snabbknappar har skapats ännu.';
+      renderEditor();
+      setPresetsDisabled(sending);
+    }
+
+    function renderEditor() {
+      editor.replaceChildren();
+      presets.forEach((preset, index) => {
+        const row = document.createElement('li');
+        const text = document.createElement('span');
+        text.textContent = `${preset.label} — ${preset.sequence}`;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = 'Ta bort';
+        remove.addEventListener('click', () => savePresets(presets.filter((_, i) => i !== index)));
+        row.append(text, remove);
+        editor.append(row);
+      });
+    }
+
+    async function savePresets(nextPresets) {
+      presetStatus.textContent = 'Sparar…';
+      try {
+        const response = await fetch('/api/dtmf-buttons', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({buttons: nextPresets})
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        presets = data.buttons;
+        renderPresets();
+        presetStatus.textContent = 'Snabbknapparna sparades.';
+        return true;
+      } catch (error) {
+        presetStatus.textContent = `Kunde inte spara: ${error.message}`;
+        return false;
+      }
+    }
+
+    document.getElementById('preset-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const presetForm = event.currentTarget;
+      if (!presetForm.reportValidity()) return;
+      const label = document.getElementById('preset-label');
+      const sequence = document.getElementById('preset-sequence');
+      if (await savePresets([...presets, {label: label.value, sequence: sequence.value}])) {
+        label.value = '';
+        sequence.value = '';
+      }
+    });
+
+    async function loadPresets() {
+      try {
+        const response = await fetch('/api/dtmf-buttons', {cache: 'no-store'});
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        presets = (await response.json()).buttons;
+        renderPresets();
+      } catch (error) {
+        presetContainer.textContent = `Kunde inte läsa snabbknappar: ${error.message}`;
+      }
+    }
+
     loadNodes();
+    loadPresets();
   </script>
 </body>
 </html>

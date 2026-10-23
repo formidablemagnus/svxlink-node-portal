@@ -442,6 +442,75 @@ class PortalDtmfTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=2)
 
+    def test_global_dtmf_buttons_are_validated_and_persisted(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {
+                "PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3"),
+                "PORTAL_ADMIN_USER": "admin",
+                "PORTAL_ADMIN_PASSWORD": "this-is-a-long-test-password",
+            },
+        ):
+            server = ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                url = f"http://127.0.0.1:{server.server_port}/api/dtmf-buttons"
+                credentials = base64.b64encode(
+                    b"admin:this-is-a-long-test-password"
+                ).decode()
+                headers = {
+                    "Authorization": f"Basic {credentials}",
+                    "Content-Type": "application/json",
+                }
+
+                with self.assertRaises(HTTPError) as unauthenticated:
+                    urlopen(url, timeout=2)
+                self.assertEqual(unauthenticated.exception.code, 401)
+
+                with urlopen(Request(url, headers=headers), timeout=2) as response:
+                    self.assertEqual(json.loads(response.read())["buttons"], [])
+
+                buttons = [
+                    {"label": " TG 240 ", "sequence": "91240#"},
+                    {"label": "Av", "sequence": "*0#"},
+                ]
+                save = Request(
+                    url, data=json.dumps({"buttons": buttons}).encode(), headers=headers
+                )
+                with urlopen(save, timeout=2) as response:
+                    self.assertEqual(response.status, 200)
+                with urlopen(Request(url, headers=headers), timeout=2) as response:
+                    self.assertEqual(
+                        json.loads(response.read())["buttons"],
+                        [
+                            {"label": "TG 240", "sequence": "91240#"},
+                            {"label": "Av", "sequence": "*0#"},
+                        ],
+                    )
+
+                invalid_payloads = [
+                    {"buttons": [{"label": "", "sequence": "1"}]},
+                    {"buttons": [{"label": "x" * 41, "sequence": "1"}]},
+                    {"buttons": [{"label": "Bad", "sequence": "12;rm"}]},
+                    {"buttons": [{"label": "Extra", "sequence": "1", "x": 1}]},
+                    {"buttons": [{"label": str(i), "sequence": "1"} for i in range(31)]},
+                ]
+                for payload in invalid_payloads:
+                    request = Request(
+                        url, data=json.dumps(payload).encode(), headers=headers
+                    )
+                    with self.subTest(payload=payload), self.assertRaises(HTTPError) as error:
+                        urlopen(request, timeout=2)
+                    self.assertEqual(error.exception.code, 400)
+
+                with urlopen(Request(url, headers=headers), timeout=2) as response:
+                    self.assertEqual(len(json.loads(response.read())["buttons"]), 2)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
 
 if __name__ == "__main__":
     unittest.main()
