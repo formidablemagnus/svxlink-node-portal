@@ -39,9 +39,21 @@ class AgentStatusTests(unittest.TestCase):
         self.assertEqual(status["radio"], {"mode": "rx", "signal_level": 72})
         self.assertEqual(status["logic"], "SimplexLogic")
 
-    def test_rejects_non_https_portal_endpoint(self):
+    def test_accepts_http_portal_endpoint(self):
+        self.assertEqual(
+            validate_portal_url("http://portal.example:8080/"),
+            "http://portal.example:8080",
+        )
+
+    def test_accepts_https_portal_endpoint(self):
+        self.assertEqual(
+            validate_portal_url("https://portal.example/"),
+            "https://portal.example",
+        )
+
+    def test_rejects_unsupported_portal_scheme(self):
         with self.assertRaises(RuntimeError):
-            validate_portal_url("http://portal.example")
+            validate_portal_url("ftp://portal.example")
 
     def test_rejects_portal_url_with_credentials(self):
         with self.assertRaises(RuntimeError):

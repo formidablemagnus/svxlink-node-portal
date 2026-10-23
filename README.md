@@ -22,7 +22,8 @@ bearer token; only its SHA-256 hash is stored in the portal database.
 - Python 3.10 or later on the portal and nodes.
 - Git on the portal server and nodes.
 - The existing SvxLink Webpanel installed on each node.
-- HTTPS for the portal endpoint, normally terminated by a reverse proxy.
+- HTTPS is recommended for the portal endpoint. HTTP is also supported for
+  trusted private networks.
 
 The portal uses only Python's standard library. Bind it to loopback and put it
 behind a TLS reverse proxy; do not expose its HTTP port to an untrusted network.
@@ -86,10 +87,18 @@ available) and run:
 sudo bash ./install.sh agent
 ```
 
-The installer prompts for the portal HTTPS URL, node ID and one-time token
-from `provision-node`, and the webpanel credentials. SvxLink and the webpanel
-must already be installed; the agent runs as `svxlink`. The agent initiates
-all connections, so no inbound firewall rule is needed.
+The installer prompts for the portal HTTP or HTTPS URL, node ID and one-time
+token from `provision-node`, and the webpanel credentials. SvxLink and the
+webpanel must already be installed; the agent runs as `svxlink`. The agent
+initiates all connections, so no inbound firewall rule is needed.
+
+HTTPS is strongly recommended. HTTP sends the bearer token and status reports
+without encryption, so only use it on a trusted private network. The portal
+defaults to listening on `127.0.0.1:8080`; for direct HTTP from nodes, set
+`PORTAL_HOST` in `/etc/default/svxlink-node-portal` to an address reachable by
+those nodes (for example `0.0.0.0`) and restrict port 8080 with the server
+firewall to trusted node addresses. Restart the portal service after changing
+its settings.
 
 Use `portal` or `agent` when installing on separate servers. If both roles
 should run on the same machine, use `sudo bash ./install.sh both` or run the

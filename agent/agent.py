@@ -23,14 +23,14 @@ def required_environment(name):
 def validate_portal_url(value):
     parsed = urlparse(value)
     if (
-        parsed.scheme != "https"
+        parsed.scheme not in ("http", "https")
         or not parsed.netloc
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
         or parsed.fragment
     ):
-        raise RuntimeError("AGENT_PORTAL_URL måste vara en HTTPS-adress.")
+        raise RuntimeError("AGENT_PORTAL_URL måste vara en HTTP- eller HTTPS-adress.")
     return value.rstrip("/")
 
 

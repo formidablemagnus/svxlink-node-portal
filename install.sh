@@ -141,10 +141,10 @@ create_agent_environment() {
 
   require_tty
   local portal_url node_id token panel_url panel_user panel_password config_path interval
-  prompt_value "Portalens HTTPS-adress, exempel https://portal.example.net"
+  prompt_value "Portalens HTTP- eller HTTPS-adress, exempel https://portal.example.net"
   portal_url="$REPLY"
-  if ! python3 -c 'import sys; from urllib.parse import urlparse; u=urlparse(sys.argv[1]); sys.exit(0 if u.scheme == "https" and u.netloc and not u.username and not u.password and not u.query and not u.fragment else 1)' "$portal_url"; then
-    say_error "Portaladressen måste vara en giltig HTTPS-adress utan inloggningsuppgifter, query eller fragment."
+  if ! python3 -c 'import sys; from urllib.parse import urlparse; u=urlparse(sys.argv[1]); sys.exit(0 if u.scheme in ("http", "https") and u.netloc and not u.username and not u.password and not u.query and not u.fragment else 1)' "$portal_url"; then
+    say_error "Portaladressen måste vara en giltig HTTP- eller HTTPS-adress utan inloggningsuppgifter, query eller fragment."
     exit 1
   fi
   prompt_value "Nod-ID från provision-node"
