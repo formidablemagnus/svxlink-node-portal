@@ -10,6 +10,7 @@ remote control and editing are intentionally not enabled yet.
 - `agent/` — lightweight agent that reads the local webpanel status and reports
   a validated status snapshot to the portal over HTTPS.
 - `web/` — self-hosted dashboard assets; no external frontend dependencies.
+- `install.sh` and `systemd/` — role-based installer and service units.
 
 The agent initiates every network request. A node does not need an inbound
 firewall rule or a public address. Each node has a unique, randomly generated
@@ -17,6 +18,7 @@ bearer token; only its SHA-256 hash is stored in the portal database.
 
 ## Requirements
 
+- Linux with systemd for the installer and services.
 - Python 3.10 or later on the portal and nodes.
 - Git on the portal server and nodes.
 - The existing SvxLink Webpanel installed on each node.
@@ -28,162 +30,97 @@ The dashboard and node-list API use HTTP Basic authentication. The portal
 requires a password of at least 16 characters; protect the portal database and
 environment file.
 
-## Install and run the portal from Git
+## Install with systemd
 
-On the central Linux server, clone the repository and install Python:
+The installer follows the same workflow as the SvxLink webpanel: choose the
+portal or node-agent role, answer the configuration prompts, and let the
+installer create, enable, and start the systemd service. The portal runs as
+the separate `svxlink-node-portal` system account; the agent runs as the
+existing `svxlink` account. Settings are stored under `/etc/default/` with
+root-only permissions, and the portal database is stored under
+`/var/lib/svxlink-node-portal/`.
 
-```bash
-sudo apt update
-sudo apt install -y git python3
-sudo install -d -o "$USER" -g "$USER" -m 0755 /opt/svxlink-node-portal
-git clone https://github.com/formidablemagnus/svxlink-node-portal.git \
-  /opt/svxlink-node-portal
-cd /opt/svxlink-node-portal
-```
+### Get the source
 
-The repository is private. Make sure the account running `git clone` has
-permission to access it, for example by authenticating with GitHub CLI first.
-If you use GitHub CLI for HTTPS authentication, run `gh auth setup-git` first.
-Alternatively, configure SSH access for the account that will clone the repo.
-Do not put a GitHub access token in the clone URL.
+Install Git and Python 3, then clone the repository using an account that can
+access the private GitHub repository:
 
-Create a private environment file for portal settings. Replace the example
-password with a unique value of at least 16 characters:
-
-```bash
-sudo install -o root -g root -m 0600 /dev/null /etc/default/svxlink-node-portal
-sudoedit /etc/default/svxlink-node-portal
-sudo chown "$USER":"$USER" /etc/default/svxlink-node-portal
-```
-
-Add these shell-compatible settings to the file:
-
-```bash
-PORTAL_ADMIN_USER=admin
-PORTAL_ADMIN_PASSWORD='replace-with-a-long-unique-password'
-PORTAL_DATABASE=/var/lib/svxlink-node-portal/portal.sqlite3
-PORTAL_HOST=127.0.0.1
-PORTAL_PORT=8080
-```
-
-The commands below run the portal as your current user, so give that user
-ownership of its database directory:
-
-```bash
-sudo install -d -o "$USER" -g "$USER" -m 0750 /var/lib/svxlink-node-portal
-```
-
-Load the settings and start the portal in the foreground:
-
-```bash
-set -a
-. /etc/default/svxlink-node-portal
-set +a
-cd /opt/svxlink-node-portal
-python3 -m portal.server serve
-```
-
-Keep the portal behind a TLS reverse proxy that forwards `/` and `/api/` to
-`127.0.0.1:8080`. Do not expose the portal's plain HTTP listener to untrusted
-networks. The current Git version does not include systemd service or reverse
-proxy configuration; the command above runs in the foreground and stops when
-the shell exits.
-
-### Register a node
-
-In a second shell on the portal server, load the same settings and create a
-unique identity for each node:
-
-```bash
-set -a
-. /etc/default/svxlink-node-portal
-set +a
-cd /opt/svxlink-node-portal
-python3 -m portal.server provision-node --name "Repeater north"
-```
-
-The command prints the node ID and bearer token once. Transfer them securely to
-that node; the portal stores only the token's SHA-256 hash. Never add node
-tokens or portal passwords to source control or shell history.
-
-## Install and run a node agent from Git
-
-On each SvxLink node, clone the same repository and check out the version or
-commit you intend to run:
+Authenticate GitHub CLI with `gh auth setup-git` or configure SSH access before
+cloning. Never put an access token in the clone URL.
 
 ```bash
 sudo apt update
 sudo apt install -y git python3
-sudo install -d -o "$USER" -g "$USER" -m 0755 /opt/svxlink-node-portal
-git clone https://github.com/formidablemagnus/svxlink-node-portal.git \
-  /opt/svxlink-node-portal
-cd /opt/svxlink-node-portal
+git clone https://github.com/formidablemagnus/svxlink-node-portal.git
+cd svxlink-node-portal
 ```
 
-The private repository must be accessible from the node for the clone. The
-agent needs no inbound firewall rule; it makes outbound HTTPS connections to
-the portal.
+### Install the central portal
 
-Create an environment file restricted to the agent account for the node's
-credentials and settings:
+On the central Linux server, run:
 
 ```bash
-sudo install -o root -g root -m 0600 /dev/null /etc/default/svxlink-node-agent
-sudoedit /etc/default/svxlink-node-agent
-sudo chown svxlink:svxlink /etc/default/svxlink-node-agent
+sudo bash ./install.sh portal
 ```
 
-Add the settings below, replacing the example values with the node ID and
-one-time token from `provision-node`, your HTTPS portal URL, and that node's
-existing webpanel credentials:
+The installer prompts for the portal credentials, installs
+`svxlink-node-portal.service`, and starts it automatically. By default, the
+service listens on `127.0.0.1:8080`; configure a TLS-terminating reverse
+proxy in front of it and do not expose the HTTP port to untrusted networks.
+
+Next, create an identity for each node. The command prints the node's bearer
+token once; transfer it securely and do not save it in shell history or source
+code:
 
 ```bash
-AGENT_PORTAL_URL=https://portal.example.net
-AGENT_NODE_ID='node_id from provision-node'
-AGENT_TOKEN='one-time token from provision-node'
-AGENT_PANEL_URL=http://127.0.0.1:8090/api/status
-AGENT_INTERVAL_SECONDS=5
-SVXLINK_WEB_USER='existing webpanel username'
-SVXLINK_WEB_PASSWORD='existing webpanel password'
-SVXLINK_CONFIG=/etc/svxlink/svxlink.conf
+sudo -u svxlink-node-portal sh -c \
+  'cd /opt/svxlink-node-portal/app && exec python3 -m portal.server provision-node --name "Repeater north"'
 ```
 
-The commands above make the environment file readable only by the `svxlink`
-account. Run the agent as an unprivileged account that can read that file,
-the SvxLink configuration and the local webpanel. For an initial foreground
-test:
+### Install the node agent
+
+On each SvxLink node, clone the repository (or make an existing clone
+available) and run:
 
 ```bash
-sudo -u svxlink sh -c \
-  'set -a; . /etc/default/svxlink-node-agent; set +a; cd /opt/svxlink-node-portal; exec python3 -m agent.agent'
+sudo bash ./install.sh agent
 ```
 
-If you use a dedicated agent account instead, change the environment file
-owner and grant that account only the required configuration and webpanel
-access. The current Git version does not include a systemd unit; the command
-above runs in the foreground and stops when interrupted.
+The installer prompts for the portal HTTPS URL, node ID and one-time token
+from `provision-node`, and the webpanel credentials. SvxLink and the webpanel
+must already be installed; the agent runs as `svxlink`. The agent initiates
+all connections, so no inbound firewall rule is needed.
 
-The agent requires an HTTPS portal URL, verifies the server certificate using
-the system trust store, and logs connection failures before retrying. Check
-the portal dashboard after starting the agent; a reporting node should appear
-online within a few seconds.
+Use `portal` or `agent` when installing on separate servers. If both roles
+should run on the same machine, use `sudo bash ./install.sh both` or run the
+installer interactively without an argument.
 
-### Update portal or agent from Git
-
-On the machine being updated, fetch and review the changes before restarting
-the foreground process:
+### Check, configure, and update
 
 ```bash
-cd /opt/svxlink-node-portal
-git fetch origin
+sudo systemctl status svxlink-node-portal.service
+sudo journalctl -u svxlink-node-portal.service -n 50 --no-pager
+sudo systemctl status svxlink-node-agent.service
+sudo journalctl -u svxlink-node-agent.service -n 50 --no-pager
+```
+
+Edit portal settings in `/etc/default/svxlink-node-portal` or agent settings
+in `/etc/default/svxlink-node-agent`, then restart the corresponding service.
+These files contain passwords and tokens and are installed with `root:root`,
+`0600` permissions.
+
+To update, fetch and review changes in the checkout, then run the installer
+again with the same role. The installer updates the program and systemd unit
+and restarts the service; settings and the portal database are preserved:
+
+```bash
 git pull --ff-only
-python3 -m unittest discover -s tests -v
+sudo bash ./install.sh portal
 ```
 
-Stop the running portal or agent with `Ctrl+C`, then start it again using the
-commands above. The SQLite database and credential files are outside the Git
-checkout and are not replaced by `git pull`. For more controlled deployments,
-check out a specific reviewed commit instead of following the latest `main`.
+Use `agent` on the nodes, or `both` if both roles are installed on the same
+machine. For controlled deployments, check out a reviewed commit instead of
+following the latest `main`.
 
 ## Status API
 
@@ -204,5 +141,4 @@ python3 -m unittest discover -s tests -v
    read-only status and log views.
 2. Add explicitly authorized remote controls, configuration editing,
    auditing and portal user management.
-3. Package the agent and portal as hardened systemd services with documented
-   upgrades and compatibility checks.
+3. Add documented compatibility checks and a guided reverse-proxy setup.

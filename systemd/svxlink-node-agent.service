@@ -1,0 +1,31 @@
+[Unit]
+Description=SvxLink Node Portal Agent
+After=network-online.target svxlink.service svxlink-webpanel.service
+Wants=network-online.target svxlink-webpanel.service
+
+[Service]
+Type=simple
+User=svxlink
+Group=svxlink
+EnvironmentFile=/etc/default/svxlink-node-agent
+Environment=PYTHONDONTWRITEBYTECODE=1
+WorkingDirectory=/opt/svxlink-node-portal/app
+ExecStart=/usr/bin/python3 -m agent.agent
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

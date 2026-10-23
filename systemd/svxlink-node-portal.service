@@ -1,0 +1,31 @@
+[Unit]
+Description=SvxLink Node Portal
+After=network.target
+
+[Service]
+Type=simple
+User=svxlink-node-portal
+Group=svxlink-node-portal
+EnvironmentFile=/etc/default/svxlink-node-portal
+Environment=PYTHONDONTWRITEBYTECODE=1
+WorkingDirectory=/opt/svxlink-node-portal/app
+ExecStart=/usr/bin/python3 -m portal.server serve
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/svxlink-node-portal
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
