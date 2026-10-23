@@ -24,10 +24,21 @@ class PortalStatusTests(unittest.TestCase):
                 "logic": "RepeaterLogic",
                 "callsign": "SA7TEST",
                 "radio": {"mode": "tx", "signal_level": None},
+                "logs": ["SvxLink started"],
             }
         )
         self.assertEqual(status["current_tg"], "240")
         self.assertEqual(status["radio"]["mode"], "tx")
+        self.assertEqual(status["logs"], ["SvxLink started"])
+
+    def test_rejects_too_many_or_oversized_log_lines(self):
+        base_status = {"active": True, "service_status": "active"}
+        with self.assertRaisesRegex(ValueError, "högst 50 loggrader"):
+            validate_status({**base_status, "logs": ["line"] * 51})
+        with self.assertRaisesRegex(ValueError, "högst 512 byte"):
+            validate_status({**base_status, "logs": ["å" * 257]})
+        with self.assertRaisesRegex(ValueError, "giltig Unicode"):
+            validate_status({**base_status, "logs": ["\ud800"]})
 
     def test_rejects_invalid_radio_mode(self):
         with self.assertRaisesRegex(ValueError, "radio.mode"):
@@ -71,6 +82,7 @@ class PortalStatusTests(unittest.TestCase):
                     "logic": "RepeaterLogic",
                     "callsign": "SA7TEST",
                     "radio": {"mode": "rx", "signal_level": 55},
+                    "logs": ["SvxLink started", "Selecting TG 240"],
                 }
                 request = Request(
                     f"{base_url}/api/v1/agent/status",
@@ -100,6 +112,10 @@ class PortalStatusTests(unittest.TestCase):
                 self.assertEqual(detail["id"], node["node_id"])
                 self.assertEqual(detail["status"]["callsign"], "SA7TEST")
                 self.assertEqual(detail["status"]["current_tg"], "240")
+                self.assertEqual(
+                    detail["status"]["logs"],
+                    ["SvxLink started", "Selecting TG 240"],
+                )
 
                 page_request = Request(
                     f"{base_url}/nodes/{node['node_id']}",

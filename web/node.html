@@ -54,6 +54,15 @@
         <div><dt>Nod-ID</dt><dd id="node-id">—</dd></div>
       </dl>
     </section>
+    <section class="panel">
+      <div class="panel-heading">
+        <div><h2>SvxLink-logg</h2><p class="muted">Senaste loggraderna från nodens webpanel.</p></div>
+        <span id="log-count" class="pill">0 rader</span>
+      </div>
+      <ol id="log-lines" class="log-lines">
+        <li class="muted">Väntar på loggrapport…</li>
+      </ol>
+    </section>
     <footer>Noden visas offline efter 30 sekunder utan statusrapport. Vyn uppdateras var femte sekund.</footer>
   </main>
   <script>
@@ -81,6 +90,22 @@
       setText('service-status', status.service_status || 'Okänd');
       setText('last-seen', lastSeen);
       setText('node-id', node.id);
+      const logs = Array.isArray(status.logs) ? status.logs : [];
+      const logList = document.getElementById('log-lines');
+      logList.replaceChildren();
+      if (logs.length) {
+        for (const line of logs) {
+          const item = document.createElement('li');
+          item.textContent = line;
+          logList.append(item);
+        }
+      } else {
+        const item = document.createElement('li');
+        item.className = 'muted';
+        item.textContent = 'Inga loggrader rapporterade.';
+        logList.append(item);
+      }
+      setText('log-count', `${logs.length} ${logs.length === 1 ? 'rad' : 'rader'}`);
       document.getElementById('online').className = node.online ? 'online' : 'offline';
       document.getElementById('error').textContent = node.online
         ? ''

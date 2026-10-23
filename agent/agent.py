@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+MAX_LOG_LINES = 50
+MAX_LOG_LINE_BYTES = 512
 
 
 def required_environment(name):
@@ -88,6 +90,16 @@ def make_status(panel_status, config_path):
     current_tg = panel_status.get("current_tg")
     if current_tg is not None and not isinstance(current_tg, (str, int)):
         current_tg = None
+    logs = panel_status.get("lines", [])
+    if not isinstance(logs, list) or any(not isinstance(line, str) for line in logs):
+        raise ValueError("Webpanelen returnerade ogiltiga loggrader.")
+    clean_logs = []
+    for line in logs[-MAX_LOG_LINES:]:
+        clean_line = "".join(
+            char for char in line if char in "\t" or ord(char) >= 32
+        )
+        encoded_line = clean_line.encode("utf-8", errors="replace")[:MAX_LOG_LINE_BYTES]
+        clean_logs.append(encoded_line.decode("utf-8", errors="ignore"))
     logic_info = read_logic_info(config_path)
     return {
         "active": panel_status["active"],
@@ -96,6 +108,7 @@ def make_status(panel_status, config_path):
         "logic": logic_info["logic"],
         "callsign": logic_info["callsign"],
         "radio": {"mode": mode, "signal_level": signal_level},
+        "logs": clean_logs,
     }
 
 

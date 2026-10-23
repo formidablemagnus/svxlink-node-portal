@@ -135,11 +135,14 @@ following the latest `main`.
 
 `POST /api/v1/agent/status` accepts a bearer-authenticated JSON report. The
 portal validates and stores only service state, radio mode/signal, current
-talkgroup, logic and callsign. Reports are considered online for 30 seconds.
+talkgroup, logic, callsign and a bounded snapshot of recent log lines. Reports
+are considered online for 30 seconds.
 `GET /api/nodes`, `GET /api/nodes/<node-id>`, the dashboard and node detail
 pages require portal Basic authentication. Select a node from the dashboard
-to view its latest service, radio, signal, talkgroup, logic, callsign and
-last-seen information. Log lines are not yet forwarded from the webpanel.
+to view its latest service, radio, signal, talkgroup, logic, callsign,
+last-seen information and up to 50 recent log lines. The agent reads log lines
+from the existing webpanel status API and reports them with each status update;
+the portal stores only the latest report, not a long-term log archive.
 
 ## Tests
 
@@ -149,8 +152,7 @@ python3 -m unittest discover -s tests -v
 
 ## Roadmap
 
-1. Extend node detail pages with read-only status and log views from the
-   existing webpanel.
+1. Add filtering and search for log lines on node detail pages.
 2. Add explicitly authorized remote controls, configuration editing,
    auditing and portal user management.
 3. Add documented compatibility checks and a guided reverse-proxy setup.

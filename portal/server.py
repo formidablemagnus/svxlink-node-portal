@@ -19,7 +19,9 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_ROOT = ROOT / "web"
-MAX_REQUEST_BYTES = 16 * 1024
+MAX_REQUEST_BYTES = 64 * 1024
+MAX_LOG_LINES = 50
+MAX_LOG_LINE_BYTES = 512
 ONLINE_WINDOW_SECONDS = 30
 VALID_RADIO_MODES = {"tx", "rx", "idle", "unknown"}
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -108,6 +110,18 @@ def validate_status(payload):
         type(signal_level) is not int or not 0 <= signal_level <= 100
     ):
         raise ValueError("'radio.signal_level' måste vara ett heltal mellan 0 och 100.")
+    logs = payload.get("logs", [])
+    if not isinstance(logs, list) or len(logs) > MAX_LOG_LINES:
+        raise ValueError(f"'logs' måste vara en lista med högst {MAX_LOG_LINES} loggrader.")
+    for line in logs:
+        if not isinstance(line, str):
+            raise ValueError("Varje loggrad måste vara text.")
+        try:
+            line_size = len(line.encode("utf-8"))
+        except UnicodeEncodeError as exc:
+            raise ValueError("Loggraderna måste innehålla giltig Unicode-text.") from exc
+        if line_size > MAX_LOG_LINE_BYTES:
+            raise ValueError(f"Varje loggrad måste vara text på högst {MAX_LOG_LINE_BYTES} byte.")
     return {
         "active": active,
         "service_status": service_status,
@@ -115,6 +129,7 @@ def validate_status(payload):
         "logic": logic,
         "callsign": callsign,
         "radio": {"mode": mode, "signal_level": signal_level},
+        "logs": logs,
     }
 
 

@@ -60,6 +60,10 @@ td a:hover { color: var(--blue); text-decoration: underline; }
 .detail-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .detail-meta dt { color: var(--muted); font-size: 12px; }
 .detail-meta dd { margin: 3px 0 0; overflow-wrap: anywhere; }
+.log-lines { max-height: 560px; overflow: auto; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 7px; background: #151515; }
+.log-lines li { padding: 7px 10px; border-bottom: 1px solid #292929; color: #ddd; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; white-space: pre-wrap; }
+.log-lines li:last-child { border-bottom: 0; }
+.log-lines li.muted { color: var(--muted); font-family: inherit; }
 code { color: #b7c8ff; overflow-wrap: anywhere; }
 footer { padding: 0 3px; color: var(--muted); font-size: 12px; }
 @media (max-width: 900px) {

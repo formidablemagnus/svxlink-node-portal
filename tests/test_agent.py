@@ -32,12 +32,41 @@ class AgentStatusTests(unittest.TestCase):
                     "service_status": "active",
                     "current_tg": 240,
                     "radio": {"mode": "rx", "signal_level": 72},
+                    "lines": ["SvxLink started", "Receiving signal\u0000noise"],
                 },
                 config,
             )
         self.assertEqual(status["current_tg"], "240")
         self.assertEqual(status["radio"], {"mode": "rx", "signal_level": 72})
         self.assertEqual(status["logic"], "SimplexLogic")
+        self.assertEqual(status["logs"], ["SvxLink started", "Receiving signalnoise"])
+
+    def test_limits_forwarded_log_lines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "svxlink.conf"
+            config.write_text("[GLOBAL]\nLOGICS=SimplexLogic\n[SimplexLogic]\nTYPE=Simplex\n")
+            status = make_status(
+                {
+                    "active": True,
+                    "service_status": "active",
+                    "lines": ["old"] + ["å" * 300 for _ in range(55)],
+                },
+                config,
+            )
+
+        self.assertEqual(len(status["logs"]), 50)
+        self.assertTrue(all(len(line.encode("utf-8")) <= 512 for line in status["logs"]))
+
+    def test_rejects_invalid_log_lines(self):
+        with self.assertRaisesRegex(ValueError, "ogiltiga loggrader"):
+            make_status(
+                {
+                    "active": True,
+                    "service_status": "active",
+                    "lines": ["valid", 42],
+                },
+                "/missing/svxlink.conf",
+            )
 
     def test_accepts_http_portal_endpoint(self):
         self.assertEqual(
