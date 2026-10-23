@@ -269,6 +269,15 @@ if [[ "$ROLE" == agent || "$ROLE" == both ]] && ! id svxlink >/dev/null 2>&1; th
 fi
 
 install -d -o root -g root -m 0755 "$APP_DIR"
+# Använd taggen om en tagg är utcheckad, annars filen VERSION.
+release_version="$(git -C "$SCRIPT_DIR" describe --tags --exact-match 2>/dev/null || true)"
+if [[ -n "$release_version" ]]; then
+  printf '%s\n' "${release_version#v}" > "$APP_DIR/VERSION"
+else
+  cp "$SCRIPT_DIR/VERSION" "$APP_DIR/VERSION"
+fi
+chown root:root "$APP_DIR/VERSION"
+chmod 0644 "$APP_DIR/VERSION"
 case "$ROLE" in
   portal)
     if ! id svxlink-node-portal >/dev/null 2>&1; then

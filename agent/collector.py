@@ -9,7 +9,10 @@ import threading
 import time
 from collections import deque
 
+from agent.version import read_version
+
 MAX_TAIL_BYTES = 256 * 1024
+VERSION_RE = re.compile(r"\d+(?:\.\d+)+[0-9A-Za-z.+~_-]*")
 MAX_LINES = 250
 MAX_STATE_BUFFER = 65536
 RADIO_EVENTS = ("Rx:sql_state", "Voter:sql_state", "Tx:state")
@@ -184,6 +187,8 @@ class Collector:
         self._lines = deque(maxlen=MAX_LINES)
         self._log_error = None
         self._service = ("okänt", False)
+        self._svxlink_version = ""
+        self._next_version_check = 0.0
         self._config = {"key": None, "sections": {}, "error": None}
         self._pty_checks = []
         self._stop = threading.Event()
@@ -319,6 +324,8 @@ class Collector:
                 if now >= next_slow:
                     self._refresh_service()
                     self._refresh_pty_checks()
+                    if now >= self._next_version_check:
+                        self._refresh_svxlink_version()
                     next_slow = now + 1
                 self._poll_log()
             except Exception:
@@ -341,6 +348,25 @@ class Collector:
             self._service = status
         if changed:
             self.on_change("service")
+
+    def _refresh_svxlink_version(self):
+        version = ""
+        try:
+            result = subprocess.run(
+                ["svxlink", "--version"],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+            match = VERSION_RE.search(f"{result.stdout}\n{result.stderr}")
+            version = match.group(0) if match else ""
+        except (OSError, subprocess.SubprocessError) as exc:
+            logging.warning("Kunde inte läsa SvxLink-version: %s", exc)
+        with self._lock:
+            changed = version != self._svxlink_version
+            self._svxlink_version = version
+            # Retry soon when unknown, otherwise only pick up upgrades occasionally.
+            self._next_version_check = time.monotonic() + (3600 if version else 60)
+        if changed:
+            self.on_change("svxlink_version")
 
     def _refresh_pty_checks(self):
         sections, error = self.config_sections()
@@ -450,6 +476,7 @@ class Collector:
             service_status, active = self._service
             radio = dict(self._last_snapshot)
             pty_checks = list(self._pty_checks)
+            svxlink_version = self._svxlink_version
         tg_event = tg_time = ""
         for line in reversed(lines):
             match = TG_EVENT_RE.search(line)
@@ -470,6 +497,8 @@ class Collector:
             logs.append(clean_text(log_error, max_line_bytes))
         return {
             "active": active,
+            "node_version": read_version(),
+            "svxlink_version": svxlink_version,
             "service_status": service_status,
             "current_tg": current_tg,
             "logic": logic_name[:128],

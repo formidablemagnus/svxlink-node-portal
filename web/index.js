@@ -11,7 +11,7 @@ function renderNodes(nodes) {
   document.getElementById('receiving').textContent = String(online.filter((node) => node.status?.radio?.mode === 'rx').length);
   document.getElementById('node-count').textContent = `${nodes.length} ${nodes.length === 1 ? 'nod' : 'noder'}`;
   if (!nodes.length) {
-    body.innerHTML = '<tr><td colspan="7" class="muted">Inga noder är registrerade ännu.</td></tr>';
+    body.innerHTML = '<tr><td colspan="9" class="muted">Inga noder är registrerade ännu.</td></tr>';
     return;
   }
   body.innerHTML = nodes.map((node) => {
@@ -24,6 +24,8 @@ function renderNodes(nodes) {
       <td>${esc(radioNames[radio.mode] || 'Okänd')}${radio.mode === 'rx' && Number.isInteger(radio.signal_level) ? `<small>Signal ${esc(radio.signal_level)}%</small>` : ''}</td>
       <td>${status.current_tg ? `TG ${esc(status.current_tg)}` : 'Okänd'}</td>
       <td>${esc(status.logic || 'Okänd')}</td>
+      <td>${status.node_version ? `v${esc(status.node_version)}` : 'Okänd'}</td>
+      <td>${esc(status.svxlink_version || 'Okänd')}</td>
       <td>${esc(lastSeen)}</td>
       <td><a class="node-settings" href="/nodes/${encodeURIComponent(node.id)}/config" aria-label="Redigera konfiguration för ${esc(node.name)}" title="Redigera konfiguration">
         <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .33 1.82l.06.06-1.65 2.86-.08-.03a1.65 1.65 0 0 0-1.82.34l-.06.06h-3.3l-.04-.08a1.65 1.65 0 0 0-1.82-.33l-.08.03-2.86-1.65.03-.08a1.65 1.65 0 0 0-.34-1.82l-.06-.06v-3.3l.08-.04a1.65 1.65 0 0 0 .33-1.82l-.03-.08 1.65-2.86.08.03a1.65 1.65 0 0 0 1.82-.34l.06-.06h3.3l.04.08a1.65 1.65 0 0 0 1.82.33l.08-.03 2.86 1.65-.03.08a1.65 1.65 0 0 0 .34 1.82l.06.06v3.3z"></path></svg>

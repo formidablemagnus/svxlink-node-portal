@@ -22,8 +22,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from portal.reflector import REFLECTOR_HUB
+from portal.version import read_version
 
 ROOT = Path(__file__).resolve().parent.parent
+PORTAL_VERSION = read_version()
 WEB_ROOT = ROOT / "web"
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_LOG_LINES = 50
@@ -226,6 +228,8 @@ def validate_status(payload):
         raise ValueError("'current_tg' måste vara text, ett heltal eller null.")
     logic = payload.get("logic", "")
     callsign = payload.get("callsign", "")
+    node_version = optional_text(payload, "node_version", 64) or ""
+    svxlink_version = optional_text(payload, "svxlink_version", 64) or ""
     if not isinstance(logic, str) or len(logic) > 128:
         raise ValueError("'logic' måste vara text på högst 128 tecken.")
     if not isinstance(callsign, str) or len(callsign) > 64:
@@ -249,6 +253,8 @@ def validate_status(payload):
         "current_tg": str(current_tg) if current_tg is not None else None,
         "logic": logic,
         "callsign": callsign,
+        "node_version": node_version,
+        "svxlink_version": svxlink_version,
         "radio": radio,
         "logs": logs,
         **validate_status_details(payload),
@@ -738,7 +744,7 @@ def admin_credentials():
 
 
 class PortalHandler(BaseHTTPRequestHandler):
-    server_version = "SvxLinkPortal/0.1"
+    server_version = f"SvxLinkPortal/{PORTAL_VERSION}"
 
     def log_message(self, format_string, *args):
         logging.info("%s - %s", self.address_string(), format_string % args)
@@ -864,7 +870,7 @@ class PortalHandler(BaseHTTPRequestHandler):
         elif path == "/api/reflector-events":
             self.stream_reflector_events()
         elif path == "/api/nodes":
-            self.send_json(200, {"nodes": node_rows()})
+            self.send_json(200, {"nodes": node_rows(), "portal_version": PORTAL_VERSION})
         elif path.startswith("/api/nodes/") and path.endswith("/radio-events"):
             node_id = path[len("/api/nodes/"):-len("/radio-events")]
             node = node_by_id(node_id) if node_id and "/" not in node_id else None

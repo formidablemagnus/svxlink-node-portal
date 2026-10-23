@@ -66,6 +66,9 @@
     const footer = document.createElement('div');
     footer.className = 'sidebar-footer';
     footer.textContent = FOOTER;
+    const version = document.createElement('div');
+    version.id = 'portal-version';
+    footer.append(version);
     aside.replaceChildren(brand, nav, footer);
   }
 
@@ -101,6 +104,8 @@
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       renderNodes(data.nodes);
+      const version = document.getElementById('portal-version');
+      if (version && data.portal_version) version.textContent = `Portal v${data.portal_version}`;
       document.dispatchEvent(new CustomEvent('nodes-loaded', {detail: data.nodes}));
     } catch (error) {
       const nav = document.getElementById('node-nav');
