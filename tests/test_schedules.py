@@ -41,6 +41,11 @@ class ScheduleTests(unittest.TestCase):
         parsed = schedules.parse_managed_crontab(content)[0]
         self.assertEqual(schedules.build_crontab(content, parsed), content)
 
+    def test_metadata_encoding_differences_are_tolerated(self):
+        loose = {**SCHEDULE, "label": "TG 2407 "}
+        content = self.crontab([webpanel_line(loose)])
+        self.assertEqual(schedules.parse_managed_crontab(content)[0][0]["label"], "TG 2407")
+
     def test_manually_edited_line_is_rejected(self):
         line = webpanel_line(SCHEDULE).replace("45 19 ", "46 19 ", 1)
         with self.assertRaises(RuntimeError):

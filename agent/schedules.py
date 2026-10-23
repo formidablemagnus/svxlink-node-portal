@@ -115,7 +115,7 @@ def parse_managed_crontab(content):
             raise RuntimeError(
                 "Panelens crontab-block innehåller ogiltiga schemadata; crontaben ändrades inte."
             ) from exc
-        if cron_job_line(schedule) != line:
+        if cron_job_line(schedule).partition(" # SVXLINK-WEBPANEL:")[0] != line.partition(" # SVXLINK-WEBPANEL:")[0]:
             raise RuntimeError("En schemalagd rad har ändrats manuellt; crontaben ändrades inte.")
         schedules.append(schedule)
     return schedules, lines[:start] + lines[end + 1:], (start, end)
