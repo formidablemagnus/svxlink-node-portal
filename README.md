@@ -224,6 +224,20 @@ Use `agent` on the nodes, or `both` if both roles are installed on the same
 machine. For controlled deployments, check out a reviewed commit instead of
 following the latest `main`.
 
+### Uninstall
+
+```bash
+sudo bash ./uninstall.sh portal    # or: agent | both
+```
+
+Run without an argument for an interactive menu. By default the portal
+database and settings files are kept so a reinstall can continue where it
+left off. Add `--purge-data` to also delete the database, portal settings and
+the `svxlink-node-portal` system user (download a backup from the Admin page
+first). Add `--yes` to skip the confirmation prompt. Removing the agent also
+removes its settings, config helper and sudoers rule; SvxLink itself is not
+touched.
+
 ## Status API
 
 `POST /api/v1/agent/status` accepts a bearer-authenticated JSON report. The
