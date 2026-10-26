@@ -1,5 +1,9 @@
 const nodeId = window.location.pathname.split('/').filter(Boolean).pop();
 const setText = (id, value) => { document.getElementById(id).textContent = value; };
+const SERVICE_LABELS = {
+  active: 'Igång', inactive: 'Avstängd', failed: 'Fel', activating: 'Startar',
+  deactivating: 'Stoppas', reloading: 'Laddar om', unknown: 'Okänd',
+};
 document.getElementById('config-link').href = `/nodes/${encodeURIComponent(nodeId)}/config`;
 document.getElementById('schedules-link').href = `/nodes/${encodeURIComponent(nodeId)}/schedules`;
 const dtmfForm = document.getElementById('dtmf-form');
@@ -256,7 +260,7 @@ function renderNode(node) {
   setText('pty-checks', (status.pty_checks || []).map((check) => check.reason).filter(Boolean).join(' '));
   setText('logic', status.logic || 'Okänd');
   setText('callsign', status.callsign || 'Okänd');
-  setText('service-status', status.service_status || 'Okänd');
+  setText('service-status', SERVICE_LABELS[status.service_status] || status.service_status || 'Okänd');
   setText('last-seen', lastSeen);
   setText('node-id', node.id);
   nodeOnline = Boolean(node.online);

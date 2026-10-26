@@ -2,6 +2,10 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
 })[char]);
 const radioNames = {tx: 'TX', rx: 'RX', idle: 'Vila', unknown: 'Okänd'};
+const SERVICE_LABELS = {
+  active: 'Igång', inactive: 'Avstängd', failed: 'Fel', activating: 'Startar',
+  deactivating: 'Stoppas', reloading: 'Laddar om', unknown: 'Okänd',
+};
 const versionParts = (value) => (String(value || '').match(/\d+/g) || []).map(Number);
 const deleteNodeDialog = document.getElementById('delete-node-dialog');
 const deleteNodeForm = document.getElementById('delete-node-form');
@@ -35,7 +39,7 @@ function renderNodes(nodes, latestSvxlink, canDeleteNodes) {
     const logic = window.SvxLogic;
     const type = logic.logicType(status.logic);
     let serviceClass = 'offline';
-    let serviceLabel = status.service_status || 'Avstängd';
+    let serviceLabel = SERVICE_LABELS[status.service_status] || status.service_status || 'Avstängd';
     if (status.active === true) {
       serviceClass = node.online ? 'online' : 'unknown';
       serviceLabel = node.online ? 'Igång' : 'Okänd';
@@ -45,7 +49,7 @@ function renderNodes(nodes, latestSvxlink, canDeleteNodes) {
     }
     return `<tr>
       <td><strong><span class="node-icon ${node.online ? 'node-online' : 'node-offline'}" title="${esc(logic.LOGIC_TITLES[type])}" role="img" aria-label="${esc(logic.LOGIC_TITLES[type])}">${logic.ICONS[type]}</span> <a href="/nodes/${encodeURIComponent(node.id)}">${esc(node.name)}</a></strong>${status.callsign ? `<small>${esc(status.callsign)}</small>` : ''}</td>
-      <td><span class="status-badge ${node.online ? 'online' : 'offline'}">${node.online ? esc(status.service_status || 'Online') : 'Offline'}</span></td>
+      <td><span class="status-badge ${node.online ? 'online' : 'offline'}">${node.online ? esc(SERVICE_LABELS[status.service_status] || status.service_status || 'Online') : 'Offline'}</span></td>
       <td><span class="status-badge ${serviceClass}" title="SvxLink-tjänst: ${esc(serviceLabel)}">${esc(serviceLabel)}</span></td>
       <td>${esc(radioNames[radio.mode] || 'Okänd')}</td>
       <td>${node.online && Number.isInteger(radio.signal_level) ? `${esc(radio.signal_level)}%` : '—'}</td>
