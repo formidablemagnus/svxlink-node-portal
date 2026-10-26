@@ -70,6 +70,9 @@ td a:hover { color: var(--blue); text-decoration: underline; }
 .status-dot.online { background: var(--green); color: var(--green); }
 .status-dot.offline { background: #e5484d; }
 .status-dot.unknown { background: #f5c518; }
+.status-dot.loading { background: transparent; border: 2px solid var(--muted); border-top-color: transparent; box-sizing: border-box; animation: status-spin .8s linear infinite; }
+@keyframes status-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .status-dot.loading { animation-duration: 2.4s; } }
 .status-dot.radio-tx { background: #e5484d; }
 .status-dot.radio-rx { background: #f5c518; }
 .status-dot.radio-idle { background: var(--green); }
