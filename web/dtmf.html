@@ -51,7 +51,14 @@
       <div id="dtmf-presets" class="preset-buttons"><span class="muted">Laddar knappar…</span></div>
       <h3>Hantera knappar</h3>
       <p class="muted">Dra i handtaget för att ändra ordning på knapparna.</p>
-      <ul id="preset-editor" class="preset-editor"></ul>
+      <div class="preset-editor-wrap">
+        <table class="preset-editor">
+          <thead>
+            <tr><th scope="col">Ordning</th><th scope="col">Knappnamn</th><th scope="col">DTMF-kommando</th><th scope="col">Åtgärd</th></tr>
+          </thead>
+          <tbody id="preset-editor"></tbody>
+        </table>
+      </div>
       <form id="preset-form" class="dtmf-form">
         <div class="dtmf-controls">
           <input id="preset-label" type="text" maxlength="40" placeholder="Namn, t.ex. TG 240" aria-label="Knappnamn" required>

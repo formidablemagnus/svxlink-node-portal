@@ -174,7 +174,7 @@ function renderPresets() {
 function renderEditor() {
   editor.replaceChildren();
   presets.forEach((preset, index) => {
-    const row = document.createElement('li');
+    const row = document.createElement('tr');
     row.dataset.index = String(index);
     row.addEventListener('dragstart', (event) => {
       if (!event.target.closest('.preset-drag-handle')) {
@@ -217,14 +217,26 @@ function renderEditor() {
     handle.draggable = true;
     handle.textContent = '↕';
     handle.title = 'Dra för att ändra ordning';
-    handle.setAttribute('aria-hidden', 'true');
-    const text = document.createElement('span');
-    text.textContent = `${preset.label} — ${preset.sequence}`;
+    handle.setAttribute('aria-label', `Ändra ordning på ${preset.label}`);
+    const handleCell = document.createElement('td');
+    handleCell.append(handle);
+    const label = document.createElement('td');
+    const labelValue = document.createElement('span');
+    labelValue.className = 'preset-value';
+    labelValue.textContent = preset.label;
+    label.append(labelValue);
+    const sequence = document.createElement('td');
+    const sequenceValue = document.createElement('span');
+    sequenceValue.className = 'preset-value preset-sequence';
+    sequenceValue.textContent = preset.sequence;
+    sequence.append(sequenceValue);
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.textContent = 'Ta bort';
     remove.addEventListener('click', () => savePresets(presets.filter((_, i) => i !== index)));
-    row.append(handle, text, remove);
+    const action = document.createElement('td');
+    action.append(remove);
+    row.append(handleCell, label, sequence, action);
     editor.append(row);
   });
 }
