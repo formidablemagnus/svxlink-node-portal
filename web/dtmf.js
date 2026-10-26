@@ -175,13 +175,56 @@ function renderEditor() {
   editor.replaceChildren();
   presets.forEach((preset, index) => {
     const row = document.createElement('li');
+    row.draggable = true;
+    row.dataset.index = String(index);
+    row.addEventListener('dragstart', (event) => {
+      if (!event.target.closest('.preset-drag-handle')) {
+        event.preventDefault();
+        return;
+      }
+      event.dataTransfer.setData('text/plain', String(index));
+      event.dataTransfer.effectAllowed = 'move';
+      row.classList.add('dragging');
+    });
+    row.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      row.classList.add('drag-over');
+    });
+    row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+    row.addEventListener('drop', async (event) => {
+      event.preventDefault();
+      row.classList.remove('drag-over');
+      const source = event.dataTransfer.getData('text/plain');
+      if (!/^\d+$/.test(source)) return;
+      const sourceIndex = Number(source);
+      const targetIndex = Number(row.dataset.index);
+      if (sourceIndex === targetIndex || sourceIndex >= presets.length) return;
+      const bounds = row.getBoundingClientRect();
+      let destinationIndex = targetIndex + (event.clientY > bounds.top + bounds.height / 2 ? 1 : 0);
+      if (sourceIndex < destinationIndex) destinationIndex -= 1;
+      if (sourceIndex === destinationIndex) return;
+      const nextPresets = [...presets];
+      const [movedPreset] = nextPresets.splice(sourceIndex, 1);
+      nextPresets.splice(destinationIndex, 0, movedPreset);
+      await savePresets(nextPresets);
+    });
+    row.addEventListener('dragend', () => {
+      row.classList.remove('dragging');
+      for (const item of editor.querySelectorAll('.drag-over')) item.classList.remove('drag-over');
+    });
+    const handle = document.createElement('span');
+    handle.className = 'preset-drag-handle';
+    handle.textContent = '↕';
+    handle.title = 'Dra för att ändra ordning';
+    handle.setAttribute('aria-hidden', 'true');
     const text = document.createElement('span');
     text.textContent = `${preset.label} — ${preset.sequence}`;
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.textContent = 'Ta bort';
     remove.addEventListener('click', () => savePresets(presets.filter((_, i) => i !== index)));
-    row.append(text, remove);
+    row.append(handle, text, remove);
     editor.append(row);
   });
 }

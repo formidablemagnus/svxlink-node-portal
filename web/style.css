@@ -164,6 +164,10 @@ dialog input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); bo
 .preset-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
 .preset-editor { margin: 0 0 12px; padding: 0; list-style: none; }
 .preset-editor li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.preset-editor li.drag-over { border-top: 2px solid var(--blue); }
+.preset-editor li.dragging { opacity: .45; }
+.preset-drag-handle { flex: 0 0 auto; cursor: grab; color: var(--muted); font-size: 18px; }
+.preset-drag-handle:active { cursor: grabbing; }
 code { color: #b7c8ff; overflow-wrap: anywhere; }
 .cron-fields { display: grid; grid-template-columns: repeat(5, minmax(90px, 1fr)); gap: 9px; }
 .cron-field { display: flex; flex-direction: column; gap: 4px; }
