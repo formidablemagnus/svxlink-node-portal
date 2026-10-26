@@ -13,6 +13,7 @@ import sqlite3
 import sys
 import threading
 import time
+import urllib.request
 import uuid
 from collections import deque
 from contextlib import contextmanager
@@ -26,6 +27,34 @@ from portal.version import read_version
 
 ROOT = Path(__file__).resolve().parent.parent
 PORTAL_VERSION = read_version()
+SVXLINK_VERSIONS_URL = "https://raw.githubusercontent.com/sm0svx/svxlink/master/src/versions"
+_latest_svxlink = {"version": "", "next": 0.0, "lock": threading.Lock(), "busy": False}
+
+
+def _fetch_latest_svxlink_version():
+    version = ""
+    try:
+        request = urllib.request.Request(SVXLINK_VERSIONS_URL, headers={"User-Agent": "svxlink-node-portal"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            text = response.read(65536).decode("utf-8", "replace")
+        match = re.search(r"^SVXLINK=(\d+(?:\.\d+)+)\s*$", text, re.MULTILINE)
+        version = match.group(1) if match else ""
+    except Exception as exc:
+        logging.warning("Kunde inte hämta senaste SvxLink-version: %s", exc)
+    with _latest_svxlink["lock"]:
+        if version:
+            _latest_svxlink["version"] = version
+        _latest_svxlink["next"] = time.monotonic() + (6 * 3600 if version else 600)
+        _latest_svxlink["busy"] = False
+
+
+def latest_svxlink_version():
+    """Return the cached master version; refresh in the background when stale."""
+    with _latest_svxlink["lock"]:
+        if time.monotonic() >= _latest_svxlink["next"] and not _latest_svxlink["busy"]:
+            _latest_svxlink["busy"] = True
+            threading.Thread(target=_fetch_latest_svxlink_version, daemon=True).start()
+        return _latest_svxlink["version"]
 WEB_ROOT = ROOT / "web"
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_LOG_LINES = 50
@@ -1111,7 +1140,7 @@ class PortalHandler(BaseHTTPRequestHandler):
         elif path == "/api/reflector-events":
             self.stream_reflector_events()
         elif path == "/api/nodes":
-            self.send_json(200, {"nodes": node_rows(), "portal_version": PORTAL_VERSION})
+            self.send_json(200, {"nodes": node_rows(), "portal_version": PORTAL_VERSION, "latest_svxlink_version": latest_svxlink_version()})
         elif path.startswith("/api/nodes/") and path.endswith("/radio-events"):
             node_id = path[len("/api/nodes/"):-len("/radio-events")]
             node = node_by_id(node_id) if node_id and "/" not in node_id else None

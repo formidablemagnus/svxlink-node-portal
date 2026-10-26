@@ -2,7 +2,18 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
 })[char]);
 const radioNames = {tx: 'TX', rx: 'RX', idle: 'Vila', unknown: 'Okänd'};
-function renderNodes(nodes) {
+const versionParts = (value) => (String(value || '').match(/\d+/g) || []).map(Number);
+function isOutdated(current, latest) {
+  const a = versionParts(current);
+  const b = versionParts(latest);
+  if (!a.length || !b.length) return false;
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    const diff = (a[i] || 0) - (b[i] || 0);
+    if (diff) return diff < 0;
+  }
+  return false;
+}
+function renderNodes(nodes, latestSvxlink) {
   const body = document.getElementById('nodes');
   const online = nodes.filter((node) => node.online);
   document.getElementById('total').textContent = String(nodes.length);
@@ -37,7 +48,7 @@ function renderNodes(nodes) {
       <td>${node.online && Number.isInteger(radio.signal_level) ? `${esc(radio.signal_level)}%` : '—'}</td>
       <td>${status.current_tg ? `TG ${esc(status.current_tg)}` : 'Okänd'}</td>
       <td>${status.node_version ? `v${esc(status.node_version)}` : 'Okänd'}</td>
-      <td>${esc(status.svxlink_version || 'Okänd')}</td>
+      <td>${esc(status.svxlink_version || 'Okänd')}${isOutdated(status.svxlink_version, latestSvxlink) ? ` <a class="version-warning" href="https://github.com/sm0svx/svxlink" target="_blank" rel="noopener noreferrer" title="Ny SvxLink-version finns (${esc(latestSvxlink)})" aria-label="Ny SvxLink-version finns (${esc(latestSvxlink)})">&#9888;</a>` : ''}</td>
       <td>${esc(lastSeen)}</td>
       <td><a class="node-settings" href="/nodes/${encodeURIComponent(node.id)}/config" aria-label="Redigera konfiguration för ${esc(node.name)}" title="Redigera konfiguration">
         <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .33 1.82l.06.06-1.65 2.86-.08-.03a1.65 1.65 0 0 0-1.82.34l-.06.06h-3.3l-.04-.08a1.65 1.65 0 0 0-1.82-.33l-.08.03-2.86-1.65.03-.08a1.65 1.65 0 0 0-.34-1.82l-.06-.06v-3.3l.08-.04a1.65 1.65 0 0 0 .33-1.82l-.03-.08 1.65-2.86.08.03a1.65 1.65 0 0 0 1.82-.34l.06-.06h3.3l.04.08a1.65 1.65 0 0 0 1.82.33l.08-.03 2.86 1.65-.03.08a1.65 1.65 0 0 0 .34 1.82l.06.06v3.3z"></path></svg>
@@ -50,7 +61,7 @@ async function refresh() {
     const response = await fetch('/api/nodes', {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-    renderNodes(data.nodes);
+    renderNodes(data.nodes, data.latest_svxlink_version);
     document.getElementById('error').textContent = '';
     document.getElementById('updated').textContent = `Uppdaterad ${new Date().toLocaleTimeString('sv-SE')}`;
   } catch (error) {
