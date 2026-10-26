@@ -79,7 +79,7 @@ td .state::before { width: 12px; height: 12px; }
 .status-dot.radio-idle { background: var(--green); }
 .status-dot.radio-off { background: var(--muted); }
 .status-item { display: inline-flex; align-items: center; gap: 5px; }
-.status-item small { font-size: 14px; color: var(--muted); font-weight: 400; }
+.status-item small { font-size: 13px; color: var(--muted); font-weight: 400; }
 .radio-states { display: flex; gap: 16px; }
 .signal-bar { height: 12px; margin-top: 8px; border-radius: 6px; background: var(--line); overflow: hidden; }
 .signal-bar > div { height: 100%; width: 0; background: var(--green); transition: width .3s; }
