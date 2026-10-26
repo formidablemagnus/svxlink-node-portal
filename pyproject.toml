@@ -1,6 +1,6 @@
 [project]
 name = "svxlink-node-portal"
-version = "1.0.0-dev6"
+version = "1.0.0-dev7"
 description = "Central management portal and outbound node agent for SvxLink"
 requires-python = ">=3.10"
 dependencies = []
