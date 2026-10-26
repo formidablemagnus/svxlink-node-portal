@@ -18,13 +18,24 @@ function renderNodes(nodes) {
     const status = node.status || {};
     const radio = status.radio || {};
     const lastSeen = node.last_seen ? new Date(node.last_seen).toLocaleString('sv-SE') : 'Aldrig';
+    const logic = window.SvxLogic;
+    const type = logic.logicType(status.logic);
+    let serviceClass = 'offline';
+    let serviceLabel = status.service_status || 'Avstängd';
+    if (status.active === true) {
+      serviceClass = node.online ? 'online' : 'unknown';
+      serviceLabel = node.online ? 'Igång' : 'Okänd';
+    } else if (status.active === undefined || status.active === null) {
+      serviceClass = 'unknown';
+      serviceLabel = 'Okänd';
+    }
     return `<tr>
-      <td><strong><a href="/nodes/${encodeURIComponent(node.id)}">${esc(node.name)}</a></strong>${status.callsign ? `<small>${esc(status.callsign)}</small>` : ''}</td>
+      <td><strong><span class="node-icon ${node.online ? 'node-online' : 'node-offline'}" title="${esc(logic.LOGIC_TITLES[type])}" role="img" aria-label="${esc(logic.LOGIC_TITLES[type])}">${logic.ICONS[type]}</span> <a href="/nodes/${encodeURIComponent(node.id)}">${esc(node.name)}</a></strong>${status.callsign ? `<small>${esc(status.callsign)}</small>` : ''}</td>
       <td><span class="state ${node.online ? 'online' : 'offline'}">${node.online ? esc(status.service_status || 'Online') : 'Offline'}</span></td>
+      <td><span class="status-item"><span class="status-dot ${serviceClass}" role="img" aria-label="SvxLink-tjänst: ${esc(serviceLabel)}" title="SvxLink-tjänst: ${esc(serviceLabel)}"></span><small>${esc(serviceLabel)}</small></span></td>
       <td>${esc(radioNames[radio.mode] || 'Okänd')}</td>
       <td>${node.online && Number.isInteger(radio.signal_level) ? `${esc(radio.signal_level)}%` : '—'}</td>
       <td>${status.current_tg ? `TG ${esc(status.current_tg)}` : 'Okänd'}</td>
-      <td>${esc(status.logic || 'Okänd')}</td>
       <td>${status.node_version ? `v${esc(status.node_version)}` : 'Okänd'}</td>
       <td>${esc(status.svxlink_version || 'Okänd')}</td>
       <td>${esc(lastSeen)}</td>

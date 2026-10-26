@@ -26,6 +26,7 @@
   }
 
   const LOGIC_TITLES = {simplex: 'Simplexlogik', repeater: 'Repeaterlogik', unknown: 'Okänd logik'};
+  window.SvxLogic = {ICONS, logicType, LOGIC_TITLES};
 
   function currentPath() {
     return window.location.pathname;

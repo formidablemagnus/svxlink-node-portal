@@ -26,6 +26,9 @@ nav a:hover, nav a.active { background: #292929; color: white; }
 .node-icon svg { width: 18px; height: 18px; }
 .node-online .node-icon { color: var(--green); }
 .node-offline .node-icon { color: #777; }
+.node-icon.node-online { color: var(--green); }
+.node-icon.node-offline { color: #777; vertical-align: middle; }
+.node-icon.node-online { vertical-align: middle; }
 .node-offline .node-name { color: var(--muted); }
 .sidebar-footer { margin-top: auto; padding: 12px 10px; color: var(--muted); font-size: 12px; }
 main { max-width: 1500px; margin-left: 220px; padding: 30px clamp(20px, 4vw, 60px); }
