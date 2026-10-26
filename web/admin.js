@@ -123,6 +123,43 @@ document.getElementById('user-form').addEventListener('submit', async (event) =>
   await userAction(() => api('/api/users', {method: 'POST', body}), 'Användaren är tillagd.');
   if (userStatus.textContent === 'Användaren är tillagd.') event.target.reset();
 });
+const backupStatus = document.getElementById('backup-status');
+
+document.getElementById('backup-download').addEventListener('click', async () => {
+  backupStatus.textContent = '';
+  try {
+    const response = await fetch('/api/backup', {cache: 'no-store'});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = (/filename="([^"]+)"/.exec(response.headers.get('Content-Disposition') || '') || [])[1]
+      || 'svxlink-portal-backup.json';
+    link.click();
+    URL.revokeObjectURL(url);
+    backupStatus.textContent = 'Säkerhetskopian är nedladdad.';
+    await loadAudit();
+  } catch (error) {
+    backupStatus.textContent = error.message;
+  }
+});
+
+document.getElementById('restore-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  backupStatus.textContent = '';
+  if (!window.confirm('All befintlig portaldata ersätts av säkerhetskopian. Fortsätta?')) return;
+  try {
+    const backup = JSON.parse(await document.getElementById('restore-file').files[0].text());
+    const password = document.getElementById('restore-password').value;
+    const data = await api('/api/restore', {method: 'POST', body: JSON.stringify({password, backup})});
+    event.target.reset();
+    backupStatus.textContent = `${data.message} Logga in igen om användarna ändrats.`;
+    api('/api/users').then((users) => renderUsers(users.users)).catch(() => {});
+    await loadAudit();
+  } catch (error) {
+    backupStatus.textContent = error instanceof SyntaxError ? 'Filen är inte giltig JSON.' : error.message;
+  }
+});
 auditSearch.addEventListener('input', renderAudit);
 document.getElementById('audit-refresh').addEventListener('click', loadAudit);
 

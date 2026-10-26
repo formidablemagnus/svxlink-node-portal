@@ -666,8 +666,101 @@ def list_audit(limit=AUDIT_PAGE_SIZE, node_id=None):
     return entries
 
 
+BACKUP_FORMAT = "svxlink-node-portal-backup"
+MAX_BACKUP_BYTES = 50 * 1024 * 1024
+BACKUP_TABLES = {
+    "nodes": (("id", True), ("name", True), ("token_hash", True), ("status_json", False),
+              ("last_seen", False), ("created_at", True)),
+    "portal_users": (("username", True), ("password_hash", True), ("role", True),
+                     ("created_at", True)),
+    "dtmf_buttons": (("position", True), ("label", True), ("sequence", True)),
+    "audit_log": (("id", True), ("created_at", True), ("actor", True), ("action", True),
+                  ("node_id", False), ("node_name", False), ("detail", False),
+                  ("outcome", True), ("command_id", False)),
+}
+
+
+def create_backup(actor):
+    with database() as connection:
+        tables = {}
+        for table, columns in BACKUP_TABLES.items():
+            names = ", ".join(name for name, _ in columns)
+            rows = connection.execute(f"SELECT {names} FROM {table}").fetchall()
+            tables[table] = [dict(row) for row in rows]
+        record_audit(connection, actor, "backup.create", "Säkerhetskopia skapad")
+    return {
+        "format": BACKUP_FORMAT,
+        "version": 1,
+        "portal_version": PORTAL_VERSION,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "tables": tables,
+    }
+
+
+def validate_backup(backup):
+    if (
+        not isinstance(backup, dict)
+        or backup.get("format") != BACKUP_FORMAT
+        or backup.get("version") != 1
+        or not isinstance(backup.get("tables"), dict)
+    ):
+        raise ValueError("Filen är ingen giltig säkerhetskopia från portalen.")
+    tables = backup["tables"]
+    clean = {}
+    for table, columns in BACKUP_TABLES.items():
+        rows = tables.get(table)
+        if not isinstance(rows, list):
+            raise ValueError(f"Säkerhetskopian saknar tabellen {table}.")
+        clean_rows = []
+        for row in rows:
+            if not isinstance(row, dict) or set(row) != {name for name, _ in columns}:
+                raise ValueError(f"Ogiltig rad i tabellen {table}.")
+            for name, required in columns:
+                value = row[name]
+                numeric = name in ("id", "position") and table in ("audit_log", "dtmf_buttons")
+                if numeric:
+                    valid = isinstance(value, int) and not isinstance(value, bool)
+                else:
+                    valid = isinstance(value, str) or (value is None and not required)
+                if not valid:
+                    raise ValueError(f"Ogiltigt värde för {name} i tabellen {table}.")
+            clean_rows.append(row)
+        clean[table] = clean_rows
+    for user in clean["portal_users"]:
+        if user["role"] not in USER_ROLES or not USERNAME_PATTERN.fullmatch(user["username"]):
+            raise ValueError("Säkerhetskopian innehåller en ogiltig användare.")
+    if len(clean["dtmf_buttons"]) > MAX_DTMF_BUTTONS:
+        raise ValueError("Säkerhetskopian innehåller för många DTMF-knappar.")
+    for table, key in (("nodes", "id"), ("portal_users", "username")):
+        if len({row[key] for row in clean[table]}) != len(clean[table]):
+            raise ValueError(f"Säkerhetskopian innehåller dubbletter i {table}.")
+    if len({row["token_hash"] for row in clean["nodes"]}) != len(clean["nodes"]):
+        raise ValueError("Säkerhetskopian innehåller dubbletter i nodernas token.")
+    return clean
+
+
+def restore_backup(actor, backup):
+    tables = validate_backup(backup)
+    with database() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("DELETE FROM agent_commands")
+        for table, columns in BACKUP_TABLES.items():
+            connection.execute(f"DELETE FROM {table}")
+            names = [name for name, _ in columns]
+            connection.executemany(
+                f"INSERT INTO {table} ({', '.join(names)}) "
+                f"VALUES ({', '.join('?' for _ in names)})",
+                [tuple(row[name] for name in names) for row in tables[table]],
+            )
+        record_audit(
+            connection, actor, "backup.restore",
+            f"Återställde {len(tables['nodes'])} noder och {len(tables['portal_users'])} användare",
+        )
+    return {table: len(rows) for table, rows in tables.items()}
+
+
 def hash_password(password):
-    salt = secrets.token_bytes(16)
+    salt =  secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac(
         "sha256", password.encode("utf-8"), salt, PASSWORD_ITERATIONS
     )
@@ -1152,6 +1245,19 @@ class PortalHandler(BaseHTTPRequestHandler):
                 query = parse_qs(urlparse(self.path).query)
                 node_id = query.get("node_id", [""])[0]
                 self.send_json(200, {"entries": list_audit(node_id=node_id or None)})
+        elif path == "/api/backup":
+            if not self.require_admin(admin_only=True):
+                return
+            body = json.dumps(create_backup(self.actor), ensure_ascii=False, indent=2).encode("utf-8")
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Disposition",
+                             f'attachment; filename="svxlink-portal-backup-{stamp}.json"')
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
         elif path == "/api/dtmf-buttons":
             self.send_json(200, {"buttons": list_dtmf_buttons()})
         elif path == "/api/reflector-events":
@@ -1332,6 +1438,26 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": str(exc)})
                 return
             self.send_json(201, credentials)
+            return
+        if path == "/api/restore":
+            if not self.require_admin(admin_only=True):
+                return
+            try:
+                payload = self.read_json_body(MAX_BACKUP_BYTES)
+                if (
+                    not isinstance(payload, dict)
+                    or set(payload) != {"password", "backup"}
+                    or not isinstance(payload["password"], str)
+                ):
+                    raise ValueError("Begäran måste innehålla lösenord och säkerhetskopia.")
+                if authenticate_user(self.actor, payload["password"]) != "admin":
+                    self.send_json(403, {"error": "Lösenordet kunde inte bekräftas."})
+                    return
+                counts = restore_backup(self.actor, payload["backup"])
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            self.send_json(200, {"message": "Säkerhetskopian är återställd.", "restored": counts})
             return
         if path == "/api/users":
             if not self.require_admin(admin_only=True):

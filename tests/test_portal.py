@@ -17,8 +17,10 @@ from portal.server import (
     PortalHandler,
     claim_agent_commands,
     complete_agent_command,
+    create_backup,
     database,
     provision_node,
+    restore_backup,
     validate_dtmf_command,
     validate_status,
 )
@@ -27,6 +29,29 @@ from portal.server import (
 def fetch_asset(base_url, headers, name):
     with urlopen(Request(f"{base_url}/assets/{name}", headers=headers), timeout=2) as response:
         return response.read().decode("utf-8")
+
+
+class PortalBackupTests(unittest.TestCase):
+    def test_backup_restores_into_new_installation(self):
+        password = "this-is-a-long-test-password"
+        env = {"PORTAL_ADMIN_USER": "admin", "PORTAL_ADMIN_PASSWORD": password}
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {**env, "PORTAL_DATABASE": str(Path(directory) / "a.sqlite3")}):
+                credentials = provision_node("Node A")
+                backup = create_backup("admin")
+            with patch.dict(os.environ, {**env, "PORTAL_DATABASE": str(Path(directory) / "b.sqlite3")}):
+                with self.assertRaises(ValueError):
+                    restore_backup("admin", {"format": "other"})
+                counts = restore_backup("admin", json.loads(json.dumps(backup)))
+                self.assertEqual(counts["nodes"], 1)
+                with database() as connection:
+                    row = connection.execute("SELECT id, name FROM nodes").fetchone()
+                    token_hash = hashlib.sha256(credentials["token"].encode()).hexdigest()
+                    found = connection.execute(
+                        "SELECT 1 FROM nodes WHERE token_hash = ?", (token_hash,)
+                    ).fetchone()
+                self.assertEqual(row["id"], credentials["node_id"])
+                self.assertIsNotNone(found)
 
 
 class PortalStatusTests(unittest.TestCase):

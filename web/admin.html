@@ -36,6 +36,19 @@
       </table>
     </section>
     <section class="panel">
+      <div class="panel-heading"><div><h2>Säkerhetskopia</h2>
+        <p class="muted">Ladda ner nodidentiteter, användare, DTMF-knappar och granskningslogg som en fil. Filen innehåller lösenords- och tokenhashar – förvara den säkert. Vid återställning, även i en ny installation, ersätts all befintlig portaldata och noderna fortsätter fungera med sina befintliga token. Du loggas in med huvudadministratören i den nya installationen och återställer härifrån.</p></div></div>
+      <div class="admin-form">
+        <button id="backup-download" type="button">Ladda ner säkerhetskopia</button>
+      </div>
+      <form id="restore-form" class="admin-form">
+        <input id="restore-file" type="file" accept="application/json,.json" required aria-label="Säkerhetskopia">
+        <input id="restore-password" type="password" placeholder="Ditt lösenord" autocomplete="current-password" required aria-label="Bekräfta med ditt lösenord">
+        <button type="submit">Återställ</button>
+      </form>
+      <p id="backup-status" class="editor-status" role="status" aria-live="polite"></p>
+    </section>
+    <section class="panel">
       <div class="panel-heading"><div><h2>Granskningslogg</h2>
         <p class="muted">Senaste händelser, nyast först. Loggen sparar de 5 000 senaste händelserna.</p></div></div>
       <div class="log-filter">
