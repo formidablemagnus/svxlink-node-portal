@@ -15,15 +15,33 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+      - name: Check for agent changes since previous tag
+        id: agent
+        run: |
+          tag_commit="$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
+          if previous_tag="$(git describe --tags --abbrev=0 "${tag_commit}^" 2>/dev/null)"; then
+            previous_commit="$(git rev-parse "${previous_tag}^{commit}")"
+            if git diff --quiet "$previous_commit" "$tag_commit" -- agent/ config_helper.py install.sh systemd/svxlink-node-agent.service ':(exclude)agent/VERSION'; then
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Write version from tag
         run: |
           version="${GITHUB_REF_NAME#v}"
           echo "$version" > VERSION
           sed -i -E "0,/^version = \".*\"/s//version = \"$version\"/" pyproject.toml
+          if [[ "${{ steps.agent.outputs.changed }}" == "true" ]]; then
+            echo "$version" > agent/VERSION
+          fi
       - name: Commit version
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add VERSION pyproject.toml
+          git add VERSION pyproject.toml agent/VERSION
           git diff --cached --quiet || git commit -m "Set version to ${GITHUB_REF_NAME#v}"
           git push

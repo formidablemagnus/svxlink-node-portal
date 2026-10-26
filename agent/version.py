@@ -1,7 +1,7 @@
-"""Read the application version from the VERSION file next to the agent directory."""
+"""Read the agent version from its own VERSION file."""
 from pathlib import Path
 
-VERSION_FILE = Path(__file__).resolve().parent.parent / "VERSION"
+VERSION_FILE = Path(__file__).resolve().parent / "VERSION"
 
 
 def read_version():

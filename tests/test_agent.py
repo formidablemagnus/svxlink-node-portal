@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from agent import version as agent_version
 from agent.agent import (
     CONFIG_HELPER,
     execute_config_command,
@@ -18,6 +19,21 @@ from agent.agent import (
     validate_portal_url,
 )
 from agent.collector import Collector, RadioState, normalize_node_info, parse_state_line, read_node_info
+
+
+class AgentVersionTests(unittest.TestCase):
+    def test_version_file_is_in_agent_directory(self):
+        self.assertEqual(
+            agent_version.VERSION_FILE,
+            Path(agent_version.__file__).resolve().parent / "VERSION",
+        )
+
+    def test_reads_own_version_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            version_file = Path(directory) / "VERSION"
+            version_file.write_text("2.3.4\n", encoding="utf-8")
+            with patch("agent.version.VERSION_FILE", version_file):
+                self.assertEqual(agent_version.read_version(), "2.3.4")
 
 
 class AgentStatusTests(unittest.TestCase):

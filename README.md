@@ -14,6 +14,15 @@ DTMF sequences to individual or selected online nodes.
 - `web/` — self-hosted dashboard assets; no external frontend dependencies.
 - `install.sh` and `systemd/` — role-based installer and service units.
 
+## Versioning
+
+The portal version is stored in the root `VERSION` file. The agent has an
+independent version in `agent/VERSION`, which is reported by each node. When a
+release tag is pushed, the version workflow updates the agent version to match
+the tag only if agent code, its configuration helper, installer, or systemd
+unit changed since the previous tag. Portal-only releases leave the agent
+version unchanged.
+
 The agent initiates every network request. A node does not need an inbound
 firewall rule or a public address. Each node has a unique, randomly generated
 bearer token; only its SHA-256 hash is stored in the portal database.
