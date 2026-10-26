@@ -509,7 +509,7 @@ def validate_service_command(payload):
         not isinstance(payload, dict)
         or set(payload) != {"action", "operation"}
         or payload["action"] != "service"
-        or payload["operation"] not in ("start", "stop")
+        or payload["operation"] not in         ("start", "stop", "restart")
     ):
         raise ValueError("Ogiltig SvxLink-tjänståtgärd.")
     return {"action": "service", "operation": payload["operation"]}

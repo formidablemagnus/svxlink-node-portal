@@ -234,7 +234,7 @@ def execute_service_command(command):
         or not isinstance(command["id"], str)
         or not re.fullmatch(r"[0-9a-f]{32}", command["id"])
         or command["action"] != "service"
-        or command["operation"] not in ("start", "stop")
+        or command["operation"] not in         ("start", "stop", "restart")
     ):
         raise ValueError("SvxLink-tjänståtgärden från portalen har ogiltigt format.")
 

@@ -513,7 +513,7 @@ class PortalServiceCommandTests(unittest.TestCase):
                     urlopen(
                         Request(
                             endpoint,
-                            data=json.dumps({"operation": "restart"}).encode("utf-8"),
+                            data=json.dumps({"operation": "reload"}).encode("utf-8"),
                             headers=headers,
                         ),
                         timeout=2,
@@ -533,7 +533,8 @@ class PortalServiceCommandTests(unittest.TestCase):
                     base_url, {"Authorization": f"Basic {credentials}"}, "node.js"
                 )
                 self.assertIn("filtered.slice().reverse()", node_script)
-                self.assertIn("waitForServiceStatus(operation === 'start')", node_script)
+                self.assertIn("waitForServiceStatus(operation !== 'stop')", node_script)
+                self.assertIn('id="service-restart"', detail_page)
                 self.assertIn("Du kan nu starta den.", node_script)
                 self.assertIn("Du kan nu stänga av den.", node_script)
             finally:

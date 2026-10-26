@@ -243,7 +243,7 @@ class AgentStatusTests(unittest.TestCase):
             run_systemctl.call_args.args[0],
             ["sudo", "-n", "/usr/bin/systemctl", "stop", "svxlink.service"],
         )
-        for operation in ("restart", "start;reboot"):
+        for operation in ("reload", "start;reboot"):
             with self.subTest(operation=operation), patch(
                 "agent.agent.subprocess.run"
             ) as run_invalid:

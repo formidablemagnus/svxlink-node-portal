@@ -9,6 +9,7 @@ const dtmfStatus = document.getElementById('dtmf-status');
 let dtmfSending = false;
 const serviceStartButton = document.getElementById('service-start');
 const serviceStopButton = document.getElementById('service-stop');
+const serviceRestartButton = document.getElementById('service-restart');
 const serviceCommandStatus = document.getElementById('service-command-status');
 let serviceCommandRunning = false;
 let nodeOnline = false;
@@ -20,7 +21,8 @@ function updateServiceControls() {
   const waitingForStatus = serviceStatusExpected !== null;
   serviceStartButton.disabled = !nodeOnline || serviceCommandRunning || waitingForStatus || serviceActive !== false;
   serviceStopButton.disabled = !nodeOnline || serviceCommandRunning || waitingForStatus || serviceActive !== true;
-}
+    serviceRestartButton.disabled = serviceStopButton.disabled;
+  }
 
 function renderRadio(radio) {
   for (const [key, label, activeText, activeClass] of [['tx', 'TX', 'sänder', 'radio-tx'], ['rx', 'RX', 'tar emot', 'radio-rx']]) {
@@ -209,12 +211,16 @@ function renderNode(node) {
   setText('node-callsign', status.callsign || 'Lokal SvxLink-status från nodagenten');
   const setDot = (id, ok, label) => {
     const el = document.getElementById(id);
-    el.className = `status-dot ${ok ? 'online' : 'offline'}`;
+    el.className = `status-dot ${ok === 'unknown' ? 'unknown' : (ok ? 'online' : 'offline')}`;
     el.title = label;
     el.setAttribute('aria-label', label);
   };
   setDot('online', node.online, `Nodanslutning: ${node.online ? 'online' : 'offline'}`);
-  setDot('service', status.active === true, `SvxLink-tjänst: ${status.active === true ? 'igång' : (status.service_status || 'avstängd/okänd')}`);
+  if (!node.online && status.active === true) {
+    setDot('service', 'unknown', 'SvxLink-tjänst: okänd (noden är offline)');
+  } else {
+    setDot('service', status.active === true, `SvxLink-tjänst: ${status.active === true ? 'igång' : (status.service_status || 'avstängd/okänd')}`);
+  }
   if (Date.now() - liveRadioAt > 5000) renderRadio(radio);
   setText('talkgroup', status.current_tg ? `TG ${status.current_tg}` : 'Okänd');
   currentTg = status.current_tg ? String(status.current_tg) : '';
@@ -277,7 +283,7 @@ async function controlService(operation) {
   updateServiceControls();
   serviceCommandStatus.textContent = operation === 'start'
     ? 'Startar SvxLink-tjänsten…'
-    : 'Stänger av SvxLink-tjänsten…';
+    : (operation === 'restart' ? 'Startar om SvxLink-tjänsten…' : 'Stänger av SvxLink-tjänsten…');
   try {
     const response = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}/service-commands`, {
       method: 'POST',
@@ -291,7 +297,7 @@ async function controlService(operation) {
       'Tjänståtgärden genomfördes.',
       'Nodagenten kunde inte ändra tjänstestatusen.'
     );
-    serviceCommandStatus.textContent = await waitForServiceStatus(operation === 'start');
+    serviceCommandStatus.textContent = await waitForServiceStatus(operation !== 'stop');
   } catch (error) {
     serviceCommandStatus.textContent = `SvxLink-åtgärden kunde inte bekräftas: ${error.message}`;
   } finally {
@@ -303,6 +309,7 @@ async function controlService(operation) {
 
 serviceStartButton.addEventListener('click', () => controlService('start'));
 serviceStopButton.addEventListener('click', () => controlService('stop'));
+serviceRestartButton.addEventListener('click', () => controlService('restart'));
 
 const presetContainer = document.getElementById('dtmf-presets');
 const reflectorContainer = document.getElementById('reflector-tgs');

@@ -66,6 +66,7 @@ td a:hover { color: var(--blue); text-decoration: underline; }
 .status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
 .status-dot.online { background: var(--green); color: var(--green); }
 .status-dot.offline { background: #e5484d; }
+.status-dot.unknown { background: #f5c518; }
 .status-dot.radio-tx { background: #e5484d; }
 .status-dot.radio-rx { background: #f5c518; }
 .status-dot.radio-idle { background: var(--green); }

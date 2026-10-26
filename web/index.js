@@ -11,7 +11,7 @@ function renderNodes(nodes) {
   document.getElementById('receiving').textContent = String(online.filter((node) => node.status?.radio?.mode === 'rx').length);
   document.getElementById('node-count').textContent = `${nodes.length} ${nodes.length === 1 ? 'nod' : 'noder'}`;
   if (!nodes.length) {
-    body.innerHTML = '<tr><td colspan="9" class="muted">Inga noder är registrerade ännu.</td></tr>';
+    body.innerHTML = '<tr><td colspan="10" class="muted">Inga noder är registrerade ännu.</td></tr>';
     return;
   }
   body.innerHTML = nodes.map((node) => {
@@ -21,7 +21,8 @@ function renderNodes(nodes) {
     return `<tr>
       <td><strong><a href="/nodes/${encodeURIComponent(node.id)}">${esc(node.name)}</a></strong>${status.callsign ? `<small>${esc(status.callsign)}</small>` : ''}</td>
       <td><span class="state ${node.online ? 'online' : 'offline'}">${node.online ? esc(status.service_status || 'Online') : 'Offline'}</span></td>
-      <td>${esc(radioNames[radio.mode] || 'Okänd')}${radio.mode === 'rx' && Number.isInteger(radio.signal_level) ? `<small>Signal ${esc(radio.signal_level)}%</small>` : ''}</td>
+      <td>${esc(radioNames[radio.mode] || 'Okänd')}</td>
+      <td>${node.online && Number.isInteger(radio.signal_level) ? `${esc(radio.signal_level)}%` : '—'}</td>
       <td>${status.current_tg ? `TG ${esc(status.current_tg)}` : 'Okänd'}</td>
       <td>${esc(status.logic || 'Okänd')}</td>
       <td>${status.node_version ? `v${esc(status.node_version)}` : 'Okänd'}</td>
