@@ -175,7 +175,6 @@ function renderEditor() {
   editor.replaceChildren();
   presets.forEach((preset, index) => {
     const row = document.createElement('li');
-    row.draggable = true;
     row.dataset.index = String(index);
     row.addEventListener('dragstart', (event) => {
       if (!event.target.closest('.preset-drag-handle')) {
@@ -215,6 +214,7 @@ function renderEditor() {
     });
     const handle = document.createElement('span');
     handle.className = 'preset-drag-handle';
+    handle.draggable = true;
     handle.textContent = '↕';
     handle.title = 'Dra för att ändra ordning';
     handle.setAttribute('aria-hidden', 'true');
