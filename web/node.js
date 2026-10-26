@@ -58,6 +58,7 @@ function startRadioStream() {
   if (radioSource) radioSource.close();
   radioSource = new EventSource(`/api/nodes/${encodeURIComponent(nodeId)}/radio-events`);
   radioSource.addEventListener('radio', (event) => {
+    if (!nodeFresh) return;
     liveRadioAt = Date.now();
     setText('live-state', 'Live');
     renderRadio(JSON.parse(event.data));
@@ -203,7 +204,32 @@ function renderNodeInfo(info) {
   }
 }
 
+let nodeFresh = false;
+let baselineLastSeen;
+const loadStartedAt = Date.now();
+const FRESH_TIMEOUT_MS = 15000;
+
+function setLoadingDots() {
+  for (const [id, text] of [['online', 'Nodanslutning'], ['service', 'SvxLink-tjänst']]) {
+    const el = document.getElementById(id);
+    el.className = 'status-dot loading';
+    el.title = `${text}: laddar`;
+    el.setAttribute('aria-label', `${text}: laddar`);
+  }
+}
+
 function renderNode(node) {
+  if (!nodeFresh) {
+    if (baselineLastSeen === undefined) baselineLastSeen = node.last_seen ?? null;
+    nodeFresh = !node.online || (node.last_seen ?? null) !== baselineLastSeen
+      || Date.now() - loadStartedAt > FRESH_TIMEOUT_MS;
+    if (!nodeFresh) {
+      setText('node-name', node.name);
+      setLoadingDots();
+      setText('updated', 'Väntar på uppdatering från noden…');
+      return;
+    }
+  }
   const status = node.status || {};
   const radio = status.radio || {};
   const lastSeen = node.last_seen ? new Date(node.last_seen).toLocaleString('sv-SE') : 'Aldrig';
