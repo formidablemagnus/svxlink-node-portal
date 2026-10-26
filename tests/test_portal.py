@@ -96,6 +96,8 @@ class PortalStatusTests(unittest.TestCase):
                     self.assertEqual(response.status, 201)
                     credentials = json.loads(response.read().decode("utf-8"))
 
+                with urlopen(Request(f"{base_url}/api/nodes", headers=headers), timeout=2) as response:
+                    self.assertTrue(json.loads(response.read().decode("utf-8"))["can_delete_nodes"])
                 self.assertEqual(credentials["name"], "Repeater north")
                 self.assertEqual(len(credentials["node_id"]), 32)
                 self.assertTrue(credentials["token"])
@@ -828,6 +830,10 @@ class PortalUserAndAuditTests(unittest.TestCase):
                 self.assertEqual(status("olle", "wrong", "/api/me"), 401)
 
                 node = call(*operator, "/api/nodes", {"name": "Audit"})
+                self.assertFalse(call(*operator, "/api/nodes")["can_delete_nodes"])
+                node_path = f"/api/nodes/{node['node_id']}"
+                self.assertEqual(status(*operator, node_path, {"password": operator[1]}, "DELETE"), 403)
+                self.assertEqual(status(*admin, node_path, {"password": "wrong-password"}, "DELETE"), 403)
                 with database() as connection:
                     connection.execute(
                         "UPDATE nodes SET last_seen = ? WHERE id = ?",
@@ -848,6 +854,27 @@ class PortalUserAndAuditTests(unittest.TestCase):
 
                 call(*admin, "/api/users/olle", {"role": "admin"}, "POST")
                 self.assertEqual(call(*operator, "/api/me")["role"], "admin")
+                self.assertTrue(call(*operator, "/api/nodes")["can_delete_nodes"])
+                self.assertEqual(
+                    call(*operator, node_path, {"password": operator[1]}, "DELETE")["message"],
+                    "Noden är borttagen.",
+                )
+                with database() as connection:
+                    self.assertIsNone(connection.execute(
+                        "SELECT id FROM nodes WHERE id = ?", (node["node_id"],)
+                    ).fetchone())
+                    self.assertEqual(connection.execute(
+                        "SELECT COUNT(*) FROM agent_commands WHERE node_id = ?",
+                        (node["node_id"],),
+                    ).fetchone()[0], 0)
+                delete_entry = next(
+                    entry for entry in call(*admin, "/api/audit")["entries"]
+                    if entry["action"] == "node.delete"
+                )
+                self.assertEqual(
+                    (delete_entry["actor"], delete_entry["node_name"], delete_entry["detail"]),
+                    ("olle", "Audit", "Audit"),
+                )
                 call(*admin, "/api/users/olle", method="DELETE")
                 self.assertEqual(status(*operator, "/api/me"), 401)
             finally:

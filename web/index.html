@@ -30,7 +30,7 @@
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>NOD</th><th>STATUS</th><th>SVX TJÄNST</th><th>RADIO</th><th>SIGNAL RX</th><th>TALGRUPP</th><th>NODVERSION</th><th>SVXLINK</th><th>SENAST SEDD</th><th><span class="visually-hidden">Inställningar</span></th></tr></thead>
+          <thead><tr><th>NOD</th><th>STATUS</th><th>SVX TJÄNST</th><th>RADIO</th><th>SIGNAL RX</th><th>TALGRUPP</th><th>NODVERSION</th><th>SVXLINK</th><th>SENAST SEDD</th><th><span class="visually-hidden">Åtgärder</span></th></tr></thead>
           <tbody id="nodes"><tr><td colspan="10" class="muted">Hämtar nodstatus…</td></tr></tbody>
         </table>
       </div>
@@ -56,6 +56,19 @@
         <input id="created-node-token" type="text" readonly>
       </section>
     </section>
+    <dialog id="delete-node-dialog" aria-labelledby="delete-node-heading">
+      <form id="delete-node-form">
+        <h2 id="delete-node-heading">Ta bort nod</h2>
+        <p id="delete-node-message" class="muted"></p>
+        <label for="delete-node-password">Ange ditt lösenord för att bekräfta</label>
+        <input id="delete-node-password" name="password" type="password" required autocomplete="current-password">
+        <p id="delete-node-error" class="error" role="status" aria-live="polite"></p>
+        <div class="delete-node-actions">
+          <button id="cancel-delete-node" type="button">Avbryt</button>
+          <button type="submit">Ta bort nod</button>
+        </div>
+      </form>
+    </dialog>
     <footer>Offline efter 30 sekunder utan statusrapport. Uppdateras var femte sekund.</footer>
   </main>
   <script src="/assets/sidebar.js"></script>

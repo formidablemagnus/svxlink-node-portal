@@ -40,6 +40,7 @@ header { margin-bottom: 27px; }
 .version-warning { color: #d4a000; text-decoration: none; font-size: 16px; }
 .node-settings:hover { border-color: var(--blue); color: var(--blue); }
 .node-settings svg { width: 19px; height: 19px; }
+.delete-node { color: var(--red); }
 .button-link { display: inline-block; padding: 8px 12px; border: 1px solid #4b4b4b; border-radius: 6px; background: #303030; color: var(--text); text-decoration: none; white-space: nowrap; }
 .button-link:hover { border-color: var(--blue); color: var(--text); }
 h1 { margin: 0; font-size: 28px; letter-spacing: -.03em; }
@@ -136,6 +137,12 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .created-node { max-width: 680px; margin-top: 18px; padding: 14px; border: 1px solid var(--line); border-radius: 7px; background: #1a1a1a; }
 .created-node h3 { margin: 0; font-size: 15px; }
 .created-node p { margin: 4px 0 12px; }
+dialog { width: min(440px, calc(100% - 32px)); padding: 20px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); color: var(--text); }
+dialog::backdrop { background: rgb(0 0 0 / 70%); }
+dialog form > p { margin: 8px 0 14px; }
+dialog label { display: block; margin-bottom: 6px; color: var(--muted); }
+dialog input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #151515; color: var(--text); font: inherit; }
+.delete-node-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 16px; }
 .created-node input { display: block; width: 100%; margin-bottom: 10px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .selection-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .node-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }

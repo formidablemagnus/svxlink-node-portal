@@ -765,6 +765,23 @@ def delete_user(actor, username):
     return True
 
 
+def delete_node(actor, node_id):
+    with database() as connection:
+        node = connection.execute(
+            "SELECT name FROM nodes WHERE id = ?", (node_id,)
+        ).fetchone()
+        if node is None:
+            return False
+        cursor = connection.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
+        if cursor.rowcount != 1:
+            return False
+        connection.execute("DELETE FROM agent_commands WHERE node_id = ?", (node_id,))
+        record_audit(
+            connection, actor, "node.delete", node["name"], node_id, node["name"]
+        )
+    return True
+
+
 def authenticate_user(username, password):
     """Return the role for valid credentials, otherwise None."""
     expected_user, expected_password = admin_credentials()
@@ -1140,7 +1157,12 @@ class PortalHandler(BaseHTTPRequestHandler):
         elif path == "/api/reflector-events":
             self.stream_reflector_events()
         elif path == "/api/nodes":
-            self.send_json(200, {"nodes": node_rows(), "portal_version": PORTAL_VERSION, "latest_svxlink_version": latest_svxlink_version()})
+            self.send_json(200, {
+                "nodes": node_rows(),
+                "portal_version": PORTAL_VERSION,
+                "latest_svxlink_version": latest_svxlink_version(),
+                "can_delete_nodes": self.role == "admin",
+            })
         elif path.startswith("/api/nodes/") and path.endswith("/radio-events"):
             node_id = path[len("/api/nodes/"):-len("/radio-events")]
             node = node_by_id(node_id) if node_id and "/" not in node_id else None
@@ -1252,6 +1274,32 @@ class PortalHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         path = urlparse(self.path).path
+        if path.startswith("/api/nodes/"):
+            if not self.require_admin(admin_only=True):
+                return
+            node_id = unquote(path[len("/api/nodes/"):])
+            if not node_id or "/" in node_id:
+                self.send_json(404, {"error": "Noden hittades inte."})
+                return
+            try:
+                payload = self.read_json_body(MAX_REQUEST_BYTES)
+                if (
+                    not isinstance(payload, dict)
+                    or set(payload) != {"password"}
+                    or not isinstance(payload["password"], str)
+                ):
+                    raise ValueError("Bekräfta borttagningen med ditt lösenord.")
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            if authenticate_user(self.actor, payload["password"]) != "admin":
+                self.send_json(403, {"error": "Lösenordet kunde inte bekräftas."})
+                return
+            if not delete_node(self.actor, node_id):
+                self.send_json(404, {"error": "Noden hittades inte."})
+            else:
+                self.send_json(200, {"message": "Noden är borttagen."})
+            return
         if not path.startswith("/api/users/"):
             self.send_json(404, {"error": "Sidan hittades inte."})
             return

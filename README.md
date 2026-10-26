@@ -237,6 +237,10 @@ last-seen information and up to 50 recent log lines. The agent tails the log,
 reads `STATE_PTY` and polls the service continuously; it sends a status report
 immediately on changes (and at least every `AGENT_INTERVAL_SECONDS`, default 5).
 The portal stores only the latest report, not a long-term log archive.
+Administrators can remove a node from the dashboard after confirming their
+password. `DELETE /api/nodes/<node-id>` is admin-only and requires the password
+in a JSON body; removal also clears queued agent commands and records an audit
+event.
 
 ### Live radio stream
 

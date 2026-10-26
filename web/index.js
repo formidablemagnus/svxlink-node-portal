@@ -3,6 +3,9 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
 })[char]);
 const radioNames = {tx: 'TX', rx: 'RX', idle: 'Vila', unknown: 'Okänd'};
 const versionParts = (value) => (String(value || '').match(/\d+/g) || []).map(Number);
+const deleteNodeDialog = document.getElementById('delete-node-dialog');
+const deleteNodeForm = document.getElementById('delete-node-form');
+let pendingDeleteNodeId = null;
 function isOutdated(current, latest) {
   const a = versionParts(current);
   const b = versionParts(latest);
@@ -13,7 +16,7 @@ function isOutdated(current, latest) {
   }
   return false;
 }
-function renderNodes(nodes, latestSvxlink) {
+function renderNodes(nodes, latestSvxlink, canDeleteNodes) {
   const body = document.getElementById('nodes');
   const online = nodes.filter((node) => node.online);
   document.getElementById('total').textContent = String(nodes.length);
@@ -52,16 +55,27 @@ function renderNodes(nodes, latestSvxlink) {
       <td>${esc(lastSeen)}</td>
       <td><a class="node-settings" href="/nodes/${encodeURIComponent(node.id)}/config" aria-label="Redigera konfiguration för ${esc(node.name)}" title="Redigera konfiguration">
         <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .33 1.82l.06.06-1.65 2.86-.08-.03a1.65 1.65 0 0 0-1.82.34l-.06.06h-3.3l-.04-.08a1.65 1.65 0 0 0-1.82-.33l-.08.03-2.86-1.65.03-.08a1.65 1.65 0 0 0-.34-1.82l-.06-.06v-3.3l.08-.04a1.65 1.65 0 0 0 .33-1.82l-.03-.08 1.65-2.86.08.03a1.65 1.65 0 0 0 1.82-.34l.06-.06h3.3l.04.08a1.65 1.65 0 0 0 1.82.33l.08-.03 2.86 1.65-.03.08a1.65 1.65 0 0 0 .34 1.82l.06.06v3.3z"></path></svg>
-      </a></td>
+      </a>${canDeleteNodes ? ` <button type="button" class="delete-node" data-node-id="${esc(node.id)}" data-node-name="${esc(node.name)}">Ta bort</button>` : ''}</td>
     </tr>`;
   }).join('');
+  for (const button of body.querySelectorAll('.delete-node')) {
+    button.addEventListener('click', () => {
+      pendingDeleteNodeId = button.dataset.nodeId;
+      document.getElementById('delete-node-message').textContent =
+        `Noden ${button.dataset.nodeName} och dess väntande agentkommandon tas bort permanent.`;
+      document.getElementById('delete-node-password').value = '';
+      document.getElementById('delete-node-error').textContent = '';
+      deleteNodeDialog.showModal();
+      document.getElementById('delete-node-password').focus();
+    });
+  }
 }
 async function refresh() {
   try {
     const response = await fetch('/api/nodes', {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-    renderNodes(data.nodes, data.latest_svxlink_version);
+    renderNodes(data.nodes, data.latest_svxlink_version, data.can_delete_nodes === true);
     document.getElementById('error').textContent = '';
     document.getElementById('updated').textContent = `Uppdaterad ${new Date().toLocaleTimeString('sv-SE')}`;
   } catch (error) {
@@ -69,6 +83,36 @@ async function refresh() {
     document.getElementById('updated').textContent = 'Uppdatering misslyckades';
   }
 }
+document.getElementById('cancel-delete-node').addEventListener('click', () => {
+  deleteNodeDialog.close();
+});
+deleteNodeDialog.addEventListener('close', () => {
+  deleteNodeForm.reset();
+  pendingDeleteNodeId = null;
+});
+deleteNodeForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const submit = deleteNodeForm.querySelector('button[type="submit"]');
+  const error = document.getElementById('delete-node-error');
+  error.textContent = '';
+  submit.disabled = true;
+  try {
+    const response = await fetch(`/api/nodes/${encodeURIComponent(pendingDeleteNodeId)}`, {
+      method: 'DELETE',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({password: document.getElementById('delete-node-password').value})
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    deleteNodeDialog.close();
+    await refresh();
+  } catch (cause) {
+    document.getElementById('delete-node-password').value = '';
+    error.textContent = `Kunde inte ta bort noden: ${cause.message}`;
+  } finally {
+    submit.disabled = false;
+  }
+});
 document.getElementById('create-node-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
