@@ -107,6 +107,13 @@ td .state::before { width: 12px; height: 12px; }
 .radio-states { display: flex; gap: 16px; }
 .signal-bar { height: 12px; margin-top: 8px; border-radius: 6px; background: var(--line); overflow: hidden; }
 .signal-bar > div { height: 100%; width: 0; background: var(--green); transition: width .3s; }
+.signal-ring { display: block; width: 26px; height: 26px; }
+.signal-ring circle { fill: none; stroke-width: 4; }
+.signal-ring .ring-track { stroke: var(--line); }
+.signal-ring .ring-fill { stroke-linecap: butt; transition: stroke-dasharray .3s; }
+.signal-low .ring-fill { stroke: var(--red); }
+.signal-mid .ring-fill { stroke: #f5c518; }
+.signal-high .ring-fill { stroke: var(--green); }
 .online { color: var(--green); }
 .offline { color: var(--muted); }
 .error { color: #ff9b9f; }

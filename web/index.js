@@ -2,6 +2,13 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
 })[char]);
 const radioNames = {tx: 'TX', rx: 'RX', idle: 'Vila', unknown: 'Okänd'};
+
+// Ring som fylls från 0 till 100 %: röd under 30, gul under 50, annars grön.
+function signalRing(value) {
+  const level = Math.min(100, Math.max(0, value));
+  const tone = level < 30 ? 'low' : level < 50 ? 'mid' : 'high';
+  return `<svg class="signal-ring signal-${tone}" viewBox="0 0 36 36" role="img" aria-label="Signal RX ${level}%"><title>Signal RX ${level}%</title><circle class="ring-track" cx="18" cy="18" r="15.915" pathLength="100"></circle><circle class="ring-fill" cx="18" cy="18" r="15.915" pathLength="100" stroke-dasharray="${level} 100" transform="rotate(-90 18 18)"></circle></svg>`;
+}
 const SERVICE_LABELS = {
   active: 'Igång', inactive: 'Avstängd', failed: 'Fel', activating: 'Startar',
   deactivating: 'Stoppas', reloading: 'Laddar om', unknown: 'Okänd',
@@ -65,7 +72,7 @@ function renderNodes(nodes, latestSvxlink, canDeleteNodes) {
       <td><span class="status-badge ${node.online ? 'online' : 'offline'}">${node.online ? esc(SERVICE_LABELS[status.service_status] || status.service_status || 'Online') : 'Offline'}</span></td>
       <td><span class="status-badge ${serviceClass}" title="SvxLink-tjänst: ${esc(serviceLabel)}">${esc(serviceLabel)}</span></td>
       <td>${esc(radioNames[radio.mode] || 'Okänd')}</td>
-      <td>${node.online && Number.isInteger(radio.signal_level) ? `${esc(radio.signal_level)}%` : '—'}</td>
+      <td>${node.online && Number.isInteger(radio.signal_level) ? signalRing(radio.signal_level) : '—'}</td>
       <td>${status.current_tg ? `TG ${esc(status.current_tg)}` : 'Okänd'}</td>
       <td><span class="status-badge ${logClass}" title="${esc(logTitle)}">${esc(logLabel)}</span></td>
       <td>${status.node_version ? `v${esc(status.node_version)}` : 'Okänd'}</td>
