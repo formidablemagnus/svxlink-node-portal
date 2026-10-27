@@ -334,10 +334,34 @@ serviceStartButton.addEventListener('click', () => controlService('start'));
 serviceStopButton.addEventListener('click', () => controlService('stop'));
 serviceRestartButton.addEventListener('click', () => controlService('restart'));
 
+const updateLabel = (channel) => {
+  if (channel === 'prerelease') return 'senaste pre-release';
+  if (channel === 'release') return 'senaste stabila release';
+  return `release ${channel}`;
+};
+
+async function loadUpdateVersions() {
+  try {
+    const response = await fetch('/api/svxlink-releases');
+    if (!response.ok) return;
+    const releases = (await response.json()).releases;
+    if (!Array.isArray(releases) || !releases.length) return;
+    const previous = updateChannel.value;
+    updateChannel.replaceChildren(new Option('Pre-release (master)', 'prerelease'));
+    releases.forEach((tag, index) => {
+      updateChannel.add(new Option(index === 0 ? `${tag} (senaste stabila release)` : tag, tag));
+    });
+    if ([...updateChannel.options].some((option) => option.value === previous)) updateChannel.value = previous;
+  } catch (error) {
+    // Kvar med standardalternativen om listan inte kan hämtas.
+  }
+}
+loadUpdateVersions();
+
 async function updateSvxLink() {
   const channel = updateChannel.value;
-  const labels = {prerelease: 'senaste pre-release', release: 'senaste stabila release'};
-  if (!labels[channel] || !window.confirm(
+  const labels = {[channel]: updateLabel(channel)};
+  if (!window.confirm(
     `Starta uppdatering till ${labels[channel]}? SvxLink byggs och installeras, och nodens SvxLink-tjänst startas om.`
   )) return;
 
@@ -354,7 +378,7 @@ async function updateSvxLink() {
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     const message = await waitForCommand(
       data.command_id,
-      (result) => `SvxLink ${result.version} installerades via ${labels[result.channel]}.`,
+      (result) => `SvxLink ${result.version} installerades via ${updateLabel(result.channel)}.`,
       'Uppdateringen misslyckades.',
       5400,
       3000,

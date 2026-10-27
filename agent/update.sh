@@ -7,6 +7,7 @@ readonly SOURCE_DIR="$WORK_DIR/svxlink"
 readonly BUILD_DIR="$SOURCE_DIR/src/build"
 readonly REPOSITORY="https://github.com/sm0svx/svxlink.git"
 readonly RELEASE_API="https://api.github.com/repos/sm0svx/svxlink/releases/latest"
+readonly RELEASE_TAG_API="https://api.github.com/repos/sm0svx/svxlink/releases/tags"
 export HOME="$WORK_DIR"
 
 fail() {
@@ -14,8 +15,8 @@ fail() {
   exit 1
 }
 
-if [[ $# -ne 1 || ( "$1" != "prerelease" && "$1" != "release" ) ]]; then
-  fail "Ange antingen prerelease eller release."
+if [[ $# -ne 1 || ! "$1" =~ ^(prerelease|release|[0-9]+(\.[0-9]+){1,3})$ ]]; then
+  fail "Ange prerelease, release eller ett versionsnummer."
 fi
 channel="$1"
 
@@ -55,10 +56,16 @@ if [[ "$channel" == "prerelease" ]]; then
   git -C "$SOURCE_DIR" fetch origin master >&2
   git -C "$SOURCE_DIR" checkout --detach origin/master >&2
 else
-  printf 'Hämtar senaste stabila SvxLink-release...\n' >&2
+  if [[ "$channel" == "release" ]]; then
+    printf 'Hämtar senaste stabila SvxLink-release...\n' >&2
+    release_url="$RELEASE_API"
+  else
+    printf 'Hämtar SvxLink-release %s...\n' "$channel" >&2
+    release_url="$RELEASE_TAG_API/$channel"
+  fi
   release_tag="$(
     curl --fail --silent --show-error --location --max-time 30 \
-      --proto '=https' --proto-redir '=https' --tlsv1.2 "$RELEASE_API" |
+      --proto '=https' --proto-redir '=https' --tlsv1.2 "$release_url" |
       python3 -c '
 import json
 import re
@@ -66,11 +73,13 @@ import sys
 
 release = json.load(sys.stdin)
 tag = release.get("tag_name")
-if release.get("prerelease") is not False or not isinstance(tag, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", tag):
+if release.get("prerelease") is not False or release.get("draft") is not False or not isinstance(tag, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", tag):
     raise SystemExit("GitHub returnerade ingen giltig stabil release-tagg.")
+if sys.argv[1] != "release" and tag != sys.argv[1]:
+    raise SystemExit("GitHub returnerade en annan release än den begärda.")
 print(tag)
-'
-  )" || fail "Kunde inte hitta senaste stabila release från GitHub."
+' "$channel"
+  )" || fail "Kunde inte hitta den begärda stabila releasen från GitHub."
   git -C "$SOURCE_DIR" fetch origin "refs/tags/$release_tag:refs/tags/$release_tag" >&2
   git -C "$SOURCE_DIR" checkout --detach "$release_tag" >&2
 fi

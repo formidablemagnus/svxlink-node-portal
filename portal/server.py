@@ -54,6 +54,45 @@ def _fetch_latest_svxlink_version():
         _latest_svxlink["busy"] = False
 
 
+_stable_releases = {"versions": [], "next": 0.0, "lock": threading.Lock(), "busy": False}
+SVXLINK_RELEASES_URL = "https://api.github.com/repos/sm0svx/svxlink/releases?per_page=30"
+STABLE_RELEASES_SHOWN = 4
+
+
+def _fetch_stable_releases():
+    versions = []
+    try:
+        request = urllib.request.Request(SVXLINK_RELEASES_URL, headers={"User-Agent": "svxlink-node-portal"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            releases = json.loads(response.read(1024 * 1024).decode("utf-8", "replace"))
+        for release in releases if isinstance(releases, list) else []:
+            tag = str(release.get("tag_name", "")) if isinstance(release, dict) else ""
+            if (
+                re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", tag)
+                and release.get("prerelease") is False
+                and release.get("draft") is not True
+                and tag not in versions
+            ):
+                versions.append(tag)
+        versions = versions[:STABLE_RELEASES_SHOWN]
+    except Exception as exc:
+        logging.warning("Kunde inte hämta SvxLink-releaser: %s", exc)
+    with _stable_releases["lock"]:
+        if versions:
+            _stable_releases["versions"] = versions
+        _stable_releases["next"] = time.monotonic() + (6 * 3600 if versions else 600)
+        _stable_releases["busy"] = False
+
+
+def stable_svxlink_releases():
+    """Return the newest stable release tags (newest first); refresh in the background."""
+    with _stable_releases["lock"]:
+        if time.monotonic() >= _stable_releases["next"] and not _stable_releases["busy"]:
+            _stable_releases["busy"] = True
+            threading.Thread(target=_fetch_stable_releases, daemon=True).start()
+        return list(_stable_releases["versions"])
+
+
 def latest_svxlink_version():
     """Return the cached latest stable release version; refresh in the background when stale."""
     with _latest_svxlink["lock"]:
@@ -748,12 +787,18 @@ def validate_service_command(payload):
     return {"action": "service", "operation": payload["operation"]}
 
 
+def is_update_channel(value):
+    return isinstance(value, str) and (
+        value in ("prerelease", "release") or re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", value) is not None
+    )
+
+
 def validate_update_command(payload):
     if (
         not isinstance(payload, dict)
         or set(payload) != {"action", "channel"}
         or payload["action"] != "update"
-        or payload["channel"] not in ("prerelease", "release")
+        or not is_update_channel(payload["channel"])
     ):
         raise ValueError("Ogiltig SvxLink-uppdatering.")
     return {"action": "update", "channel": payload["channel"]}
@@ -1789,6 +1834,8 @@ class PortalHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"buttons": list_dtmf_buttons()})
         elif path == "/api/reflector-events":
             self.stream_reflector_events()
+        elif path == "/api/svxlink-releases":
+            self.send_json(200, {"releases": stable_svxlink_releases()})
         elif path == "/api/nodes":
             self.send_json(200, {
                 "nodes": node_rows(),

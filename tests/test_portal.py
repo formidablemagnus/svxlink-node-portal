@@ -808,6 +808,14 @@ class PortalUpdateCommandTests(unittest.TestCase):
                         timeout=2,
                     )
                 self.assertEqual(invalid_channel.exception.code, 400)
+                from portal.server import validate_update_command
+                self.assertEqual(
+                    validate_update_command({"action": "update", "channel": "26.05.1"})["channel"],
+                    "26.05.1",
+                )
+                for bad in ("26.05.1; rm", "../x", "26", ""):
+                    with self.assertRaises(ValueError):
+                        validate_update_command({"action": "update", "channel": bad})
                 with self.assertRaises(HTTPError) as forbidden:
                     urlopen(
                         Request(

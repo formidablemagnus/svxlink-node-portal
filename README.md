@@ -131,10 +131,11 @@ browser on the lines already reported by the node.
 
 ### Update SvxLink
 
-On a node's detail page, an administrator can choose **Senaste pre-release**
-or **Senaste stabila release** and start an update. Pre-release builds use the
-latest `master` commit; stable builds use the latest non-prerelease GitHub
-release. Both build a Debian package and restart `svxlink.service` after
+On a node's detail page, an administrator can choose **Pre-release (master)**
+or one of the four newest stable releases (the list shows their version
+numbers) and start an update. Pre-release builds use the
+latest `master` commit; stable builds use the chosen non-prerelease GitHub
+release tag. Both build a Debian package and restart `svxlink.service` after
 installation. The command and its result are recorded in the portal audit log.
 The agent reports when the update starts and sends a progress heartbeat every
 20 seconds. The node page shows the current status, disables node controls while

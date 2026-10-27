@@ -270,7 +270,7 @@ def execute_update_command(command, progress_callback=None):
         or not isinstance(command["id"], str)
         or not re.fullmatch(r"[0-9a-f]{32}", command["id"])
         or command["action"] != "update"
-        or command["channel"] not in ("prerelease", "release")
+        or not re.fullmatch(r"prerelease|release|[0-9]+(?:\.[0-9]+){1,3}", str(command["channel"]))
     ):
         raise ValueError("SvxLink-uppdateringen från portalen har ogiltigt format.")
 

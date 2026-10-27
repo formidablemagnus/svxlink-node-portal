@@ -30,6 +30,9 @@ def fail(message):
     raise SystemExit(1)
 
 
+CHANNEL_PATTERN = re.compile(r"prerelease|release|[0-9]+(?:\.[0-9]+){1,3}")
+
+
 def read_request():
     try:
         request = json.loads(sys.stdin.buffer.read(4096).decode("utf-8"))
@@ -38,9 +41,10 @@ def read_request():
     if (
         not isinstance(request, dict)
         or set(request) != {"channel"}
-        or request["channel"] not in ("prerelease", "release")
+        or not isinstance(request["channel"], str)
+        or not CHANNEL_PATTERN.fullmatch(request["channel"])
     ):
-        fail("Välj antingen senaste pre-release eller senaste stabila release.")
+        fail("Välj pre-release, senaste stabila release eller ett versionsnummer.")
     return request["channel"]
 
 
@@ -248,7 +252,7 @@ def main():
         len(sys.argv) == 3
         and sys.argv[1] == "--run-update"
         and os.geteuid() == 0
-        and sys.argv[2] in ("prerelease", "release")
+        and CHANNEL_PATTERN.fullmatch(sys.argv[2])
     ):
         run_update_service(sys.argv[2])
         return
