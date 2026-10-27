@@ -29,7 +29,7 @@ function renderNodes(nodes, latestSvxlink, canDeleteNodes) {
   document.getElementById('receiving').textContent = String(online.filter((node) => node.status?.radio?.mode === 'rx').length);
   document.getElementById('node-count').textContent = `${nodes.length} ${nodes.length === 1 ? 'nod' : 'noder'}`;
   if (!nodes.length) {
-    body.innerHTML = '<tr><td colspan="10" class="muted">Inga noder är registrerade ännu.</td></tr>';
+    body.innerHTML = '<tr><td colspan="11" class="muted">Inga noder är registrerade ännu.</td></tr>';
     return;
   }
   body.innerHTML = nodes.map((node) => {
@@ -47,6 +47,19 @@ function renderNodes(nodes, latestSvxlink, canDeleteNodes) {
       serviceClass = 'unknown';
       serviceLabel = 'Okänd';
     }
+    const logs = Array.isArray(status.logs) ? status.logs : [];
+    const errorCount = logs.filter((line) => logic.logLevel(line) === 'error').length;
+    const warningCount = logs.filter((line) => logic.logLevel(line) === 'warning').length;
+    let logClass = 'log-ok';
+    let logLabel = 'OK';
+    if (errorCount) {
+      logClass = 'log-error';
+      logLabel = `${errorCount} fel`;
+    } else if (warningCount) {
+      logClass = 'log-warning';
+      logLabel = `${warningCount} ${warningCount === 1 ? 'varning' : 'varningar'}`;
+    }
+    const logTitle = `Senaste loggrader: ${errorCount} fel, ${warningCount} varningar`;
     return `<tr>
       <td><strong><span class="node-icon ${node.online ? 'node-online' : 'node-offline'}" title="${esc(logic.LOGIC_TITLES[type])}" role="img" aria-label="${esc(logic.LOGIC_TITLES[type])}">${logic.ICONS[type]}</span> <a href="/nodes/${encodeURIComponent(node.id)}">${esc(node.name)}</a></strong>${status.callsign ? `<small>${esc(status.callsign)}</small>` : ''}</td>
       <td><span class="status-badge ${node.online ? 'online' : 'offline'}">${node.online ? esc(SERVICE_LABELS[status.service_status] || status.service_status || 'Online') : 'Offline'}</span></td>
@@ -54,6 +67,7 @@ function renderNodes(nodes, latestSvxlink, canDeleteNodes) {
       <td>${esc(radioNames[radio.mode] || 'Okänd')}</td>
       <td>${node.online && Number.isInteger(radio.signal_level) ? `${esc(radio.signal_level)}%` : '—'}</td>
       <td>${status.current_tg ? `TG ${esc(status.current_tg)}` : 'Okänd'}</td>
+      <td><span class="status-badge ${logClass}" title="${esc(logTitle)}">${esc(logLabel)}</span></td>
       <td>${status.node_version ? `v${esc(status.node_version)}` : 'Okänd'}</td>
       <td>${esc(status.svxlink_version || 'Okänd')}${isOutdated(status.svxlink_version, latestSvxlink) ? ` <a class="version-warning" href="https://github.com/sm0svx/svxlink" target="_blank" rel="noopener noreferrer" title="Ny SvxLink-version finns (${esc(latestSvxlink)})" aria-label="Ny SvxLink-version finns (${esc(latestSvxlink)})">&#9888;</a>` : ''}</td>
       <td>${esc(lastSeen)}</td>

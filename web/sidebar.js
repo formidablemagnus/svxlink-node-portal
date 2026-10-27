@@ -25,8 +25,17 @@
     return 'unknown';
   }
 
+  const ERROR_RE = /\b(error|fatal|critical|\*{3})\b|\bfel\b/i;
+  const WARNING_RE = /\b(warn(ing)?|varning)\b/i;
+
+  function logLevel(line) {
+    if (ERROR_RE.test(line)) return 'error';
+    if (WARNING_RE.test(line)) return 'warning';
+    return 'info';
+  }
+
   const LOGIC_TITLES = {simplex: 'Simplexlogik', repeater: 'Repeaterlogik', unknown: 'Okänd logik'};
-  window.SvxLogic = {ICONS, logicType, LOGIC_TITLES};
+  window.SvxLogic = {ICONS, logicType, LOGIC_TITLES, logLevel};
 
   function currentPath() {
     return window.location.pathname;

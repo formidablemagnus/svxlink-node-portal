@@ -70,14 +70,7 @@ function startRadioStream() {
 }
 
 let allLogs = [];
-const ERROR_RE = /\b(error|fatal|critical|\*{3})\b|\bfel\b/i;
-const WARNING_RE = /\b(warn(ing)?|varning)\b/i;
-
-function logLevel(line) {
-  if (ERROR_RE.test(line)) return 'error';
-  if (WARNING_RE.test(line)) return 'warning';
-  return 'info';
-}
+const logLevel = window.SvxLogic.logLevel;
 
 function renderLogs() {
   const query = document.getElementById('log-search').value;
@@ -105,6 +98,8 @@ function renderLogs() {
   if (filtered.length) {
     for (const line of filtered.slice().reverse()) {
       const item = document.createElement('li');
+      const lineLevel = logLevel(line);
+      if (lineLevel !== 'info') item.className = `log-${lineLevel}`;
       item.textContent = line;
       logList.append(item);
     }
