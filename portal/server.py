@@ -82,6 +82,8 @@ MAX_NODE_INFO_BYTES = 64 * 1024
 AGENT_COMMAND_TTL_SECONDS = 300
 AGENT_UPDATE_TIMEOUT_SECONDS = 4 * 60 * 60
 AGENT_UPDATE_COMMAND_TTL_SECONDS = AGENT_UPDATE_TIMEOUT_SECONDS + 60 * 60
+UPDATE_HEARTBEAT_TIMEOUT_SECONDS = 180
+UPDATE_PENDING_TIMEOUT_SECONDS = 600
 UPDATE_PROGRESS_MESSAGES = {
     "starting": "Uppdateringen har startat.",
     "working": "SvxLink byggs och installeras. Uppdateringen pågår.",
@@ -597,7 +599,31 @@ def node_by_id(node_id):
     return node_record(row, update) if row else None
 
 
+def expire_stalled_updates(connection, now):
+    """Expire updates whose agent stopped reporting (heartbeat every 20 s)."""
+    rows = connection.execute(
+        "SELECT id, payload_json, status, created_at, updated_at FROM agent_commands "
+        "WHERE status IN ('pending', 'in_progress')"
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"])
+            limit = UPDATE_HEARTBEAT_TIMEOUT_SECONDS if row["status"] == "in_progress" \
+                else UPDATE_PENDING_TIMEOUT_SECONDS
+            stamp = row["updated_at"] if row["status"] == "in_progress" else row["created_at"]
+            stale = now - datetime.fromisoformat(stamp) > timedelta(seconds=limit)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(payload, dict) and payload.get("action") == "update" and stale:
+            connection.execute(
+                "UPDATE agent_commands SET status = 'expired', result_json = NULL, "
+                "updated_at = ? WHERE id = ? AND status = ?",
+                (now.isoformat(), row["id"], row["status"]),
+            )
+
+
 def active_update_statuses(connection, node_ids=None):
+    expire_stalled_updates(connection, datetime.now(timezone.utc))
     rows = connection.execute(
         "SELECT node_id, payload_json, status, result_json FROM agent_commands "
         "WHERE status IN ('pending', 'in_progress') ORDER BY created_at DESC"
@@ -1241,6 +1267,7 @@ def enqueue_agent_command(node_id, payload, actor="system"):
     with database() as connection:
         connection.execute("BEGIN IMMEDIATE")
         cleanup_agent_commands(connection, now)
+        expire_stalled_updates(connection, now)
         node = connection.execute(
             "SELECT id, last_seen, status_json FROM nodes WHERE id = ?", (node_id,)
         ).fetchone()
@@ -1309,6 +1336,7 @@ def claim_agent_commands(node_id):
     retry_before = (now - timedelta(seconds=45)).isoformat()
     with database() as connection:
         cleanup_agent_commands(connection, now)
+        expire_stalled_updates(connection, now)
         stale_commands = connection.execute(
             "SELECT id, payload_json FROM agent_commands "
             "WHERE node_id = ? AND status = 'in_progress' AND updated_at < ?",

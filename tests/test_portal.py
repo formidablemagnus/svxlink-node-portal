@@ -17,6 +17,7 @@ from portal.server import (
     PortalHandler,
     _login_failures,
     claim_agent_commands,
+    active_update_statuses,
     complete_agent_command,
     create_backup,
     database,
@@ -901,10 +902,11 @@ class PortalUpdateCommandTests(unittest.TestCase):
                 self.assertEqual(duplicate_update.exception.code, 409)
 
                 old = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+                recent = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
                 with database() as connection:
                     connection.execute(
                         "UPDATE agent_commands SET created_at = ?, updated_at = ? WHERE id = ?",
-                        (old, old, command_id),
+                        (old, recent, command_id),
                     )
                 self.assertEqual(claim_agent_commands(node["node_id"]), [])
                 self.assertEqual(
@@ -942,6 +944,19 @@ class PortalUpdateCommandTests(unittest.TestCase):
                 self.assertTrue(complete_agent_command(
                     node["node_id"], service_id, {"ok": True}
                 ))
+                stalled_id = enqueue_agent_command(
+                    node["node_id"], {"action": "update", "channel": "release"}, "admin"
+                )
+                self.assertEqual(len(claim_agent_commands(node["node_id"])), 1)
+                silent = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+                with database() as connection:
+                    connection.execute(
+                        "UPDATE agent_commands SET updated_at = ? WHERE id = ?",
+                        (silent, stalled_id),
+                    )
+                with database() as connection:
+                    self.assertEqual(active_update_statuses(connection), {})
+                self.assertEqual(take_agent_command_result(stalled_id)["status"], "expired")
                 with urlopen(
                     Request(
                         f"{base_url}/api/audit",
@@ -954,7 +969,7 @@ class PortalUpdateCommandTests(unittest.TestCase):
                         if entry["action"] == "update"
                     ]
                 self.assertEqual(
-                    (updates[0]["detail"], updates[0]["outcome"]),
+                    (updates[1]["detail"], updates[1]["outcome"]),
                     ("release", "completed"),
                 )
                 with urlopen(
