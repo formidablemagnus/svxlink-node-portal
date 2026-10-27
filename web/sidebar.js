@@ -39,7 +39,7 @@
     brand.href = '/';
     brand.append('SvxLink ');
     const brandSpan = document.createElement('span');
-    brandSpan.textContent = 'PORTAL';
+    brandSpan.textContent = 'MANAGER';
     brand.append(brandSpan);
 
     const nav = document.createElement('nav');
@@ -107,7 +107,7 @@
       const data = await response.json();
       renderNodes(data.nodes);
       const version = document.getElementById('portal-version');
-      if (version && data.portal_version) version.textContent = `Portal v${data.portal_version}`;
+      if (version && data.portal_version) version.textContent = `Manager v${data.portal_version}`;
       document.dispatchEvent(new CustomEvent('nodes-loaded', {detail: data.nodes}));
     } catch (error) {
       const nav = document.getElementById('node-nav');

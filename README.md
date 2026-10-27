@@ -1,4 +1,4 @@
-# SvxLink Node Portal
+# SvxLink Manager
 
 Central dashboard and outbound node agent for managing multiple SvxLink nodes.
 The portal reports service, radio, talkgroup, logic and callsign status, lets

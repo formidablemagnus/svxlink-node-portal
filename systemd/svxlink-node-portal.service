@@ -1,5 +1,5 @@
 [Unit]
-Description=SvxLink Node Portal
+Description=SvxLink Manager
 After=network.target
 
 [Service]

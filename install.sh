@@ -49,7 +49,7 @@ write_environment() {
   shift
   umask 077
   {
-    printf '# Managed by the SvxLink Node Portal installer.\n'
+    printf '# Managed by the SvxLink Manager installer.\n'
     while (( $# )); do
       printf '%s=%s\n' "$1" "$(systemd_quote "$2")"
       shift 2
