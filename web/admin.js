@@ -4,6 +4,33 @@ const userStatus = document.getElementById('user-status');
 const auditSearch = document.getElementById('audit-search');
 let auditEntries = [];
 
+const tabs = [...document.querySelectorAll('[role="tab"]')];
+
+function activateTab(tab, focus = false) {
+  for (const candidate of tabs) {
+    const selected = candidate === tab;
+    candidate.setAttribute('aria-selected', String(selected));
+    candidate.tabIndex = selected ? 0 : -1;
+    document.getElementById(candidate.getAttribute('aria-controls')).hidden = !selected;
+  }
+  if (focus) tab.focus();
+}
+
+for (const tab of tabs) {
+  tab.addEventListener('click', () => activateTab(tab));
+  tab.addEventListener('keydown', (event) => {
+    const index = tabs.indexOf(tab);
+    let nextIndex;
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length;
+    else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabs.length) % tabs.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = tabs.length - 1;
+    else return;
+    event.preventDefault();
+    activateTab(tabs[nextIndex], true);
+  });
+}
+
 const ROLE_LABELS = {admin: 'Administratör', operator: 'Operatör'};
 const OUTCOME_LABELS = {
   queued: 'Köad', completed: 'Utförd', failed: 'Misslyckades', expired: 'Förföll', ok: 'OK',

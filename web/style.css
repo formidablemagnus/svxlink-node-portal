@@ -68,6 +68,10 @@ header .muted { font-size: 12px; text-align: right; }
 .summary article span { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .1em; }
 .summary article strong { font-size: 25px; }
 .panel { margin-bottom: 17px; padding: 20px; }
+.admin-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 17px; border-bottom: 1px solid var(--line); }
+.admin-tabs button { margin-bottom: -1px; border-color: transparent; border-bottom-color: var(--line); border-radius: 6px 6px 0 0; background: transparent; color: var(--muted); }
+.admin-tabs button[aria-selected="true"] { border-color: var(--line); border-bottom-color: var(--panel); background: var(--panel); color: var(--text); }
+.admin-tabs button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .panel-heading { margin-bottom: 18px; }
 .panel-heading p, .settings p { margin: 4px 0 0; }
 .pill { padding: 3px 9px; border-radius: 20px; background: #353535; color: #ddd; font-size: 12px; white-space: nowrap; }
