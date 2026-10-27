@@ -17,6 +17,11 @@
       </div>
       <div id="updated" class="muted" role="status" aria-live="polite">Läser noder…</div>
     </header>
+    <div class="admin-tabs" role="tablist" aria-label="DTMF-styrning">
+      <button id="send-tab" type="button" role="tab" aria-selected="true" aria-controls="send-panel" tabindex="0">Skicka kommando</button>
+      <button id="edit-tab" type="button" role="tab" aria-selected="false" aria-controls="edit-panel" tabindex="-1" data-admin-only hidden>Redigera knappar</button>
+    </div>
+    <div id="send-panel" role="tabpanel" aria-labelledby="send-tab">
     <section class="panel">
       <div class="panel-heading">
         <div><h2>Välj noder</h2><p class="muted">Endast online-noder kan väljas, högst 100 åt gången.</p></div>
@@ -49,8 +54,19 @@
       <h2>Snabbknappar</h2>
       <p class="muted">Gemensamma för alla noder. Ett klick skickar sekvensen till de valda noderna efter bekräftelse.</p>
       <div id="dtmf-presets" class="preset-buttons"><span class="muted">Laddar knappar…</span></div>
-      <div data-admin-only hidden>
-      <h3>Hantera knappar</h3>
+    </section>
+    <section class="panel">
+      <div class="panel-heading">
+        <div><h2>Resultat</h2><p class="muted">Status visas separat för varje nod.</p></div>
+      </div>
+      <ol id="bulk-results" class="bulk-results">
+        <li class="muted">Inga kommandon skickade.</li>
+      </ol>
+    </section>
+    </div>
+    <div id="edit-panel" role="tabpanel" aria-labelledby="edit-tab" hidden>
+    <section class="panel">
+      <h2>Redigera knappar</h2>
       <p class="muted">Dra i handtaget för att ändra ordning på knapparna.</p>
       <div class="preset-editor-wrap">
         <table class="preset-editor">
@@ -69,16 +85,8 @@
         </div>
         <p id="preset-status" class="editor-status" role="status" aria-live="polite"></p>
       </form>
-      </div>
     </section>
-    <section class="panel">
-      <div class="panel-heading">
-        <div><h2>Resultat</h2><p class="muted">Status visas separat för varje nod.</p></div>
-      </div>
-      <ol id="bulk-results" class="bulk-results">
-        <li class="muted">Inga kommandon skickade.</li>
-      </ol>
-    </section>
+    </div>
     <footer>En nodagent tar emot kommandon via sin utgående anslutning till portalen.</footer>
   </main>
   <script src="/assets/sidebar.js"></script>
