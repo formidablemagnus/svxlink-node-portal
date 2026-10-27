@@ -76,7 +76,10 @@ function renderNodes(nodes, latestSvxlink, canDeleteNodes) {
     });
   }
 }
+let refreshing = false;
 async function refresh() {
+  if (refreshing || document.hidden) return;
+  refreshing = true;
   try {
     const response = await fetch('/api/nodes', {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -87,6 +90,8 @@ async function refresh() {
   } catch (error) {
     document.getElementById('error').textContent = `Kunde inte hämta nodstatus: ${error.message}`;
     document.getElementById('updated').textContent = 'Uppdatering misslyckades';
+  } finally {
+    refreshing = false;
   }
 }
 document.getElementById('cancel-delete-node').addEventListener('click', () => {
@@ -148,4 +153,7 @@ document.getElementById('create-node-form').addEventListener('submit', async (ev
   }
 });
 refresh();
-setInterval(refresh, 5000);
+setInterval(refresh, 1500);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) refresh();
+});
