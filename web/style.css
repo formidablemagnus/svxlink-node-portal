@@ -135,6 +135,21 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .service-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .config-editor textarea { display: block; width: 100%; min-height: 220px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: #151515; color: var(--text); font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; resize: vertical; }
 .config-editor textarea:disabled { opacity: .7; }
+.config-editor textarea[hidden], .nif[hidden], .nif-errors[hidden] { display: none; }
+.nif-tabs { margin-bottom: 10px; }
+.nif-tabs button[aria-pressed="true"] { border-color: var(--blue); background: #3a4668; }
+.nif-group { margin: 0 0 14px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; }
+.nif-group legend { padding: 0 6px; color: var(--muted); font-size: 12px; }
+.nif-card { margin-bottom: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: #1b1b1b; }
+.nif-sub { margin-top: 10px; }
+.nif-sub h4, .nif-sub h5 { margin: 0 0 6px; font-size: 13px; }
+.nif-sub h5 { color: var(--muted); font-weight: 600; }
+.nif-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-bottom: 8px; }
+.nif-field { display: flex; flex-direction: column; gap: 3px; min-width: 120px; flex: 1 1 140px; color: var(--muted); font-size: 12px; }
+.nif-field input:not([type="checkbox"]) { padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: #151515; color: var(--text); font: inherit; }
+.nif-check { flex-direction: row; align-items: center; gap: 8px; flex: 0 0 auto; }
+.nif-remove { border-color: #6b3a3d; }
+.nif-errors { margin: 8px 0 0; padding-left: 20px; }
 .editor-status { min-height: 1.5em; margin: 6px 0 0; overflow-wrap: anywhere; }
 .dtmf-form { max-width: 680px; }
 .dtmf-form > label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }

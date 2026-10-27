@@ -43,7 +43,13 @@
             <button type="button" data-save="node_info.json" disabled>Spara ändringar</button>
           </div>
         </div>
-        <textarea id="editor-node-info" rows="12" spellcheck="false" aria-label="Nodinformation JSON" disabled></textarea>
+        <div class="config-actions nif-tabs" role="group" aria-label="Vy">
+          <button type="button" data-node-info-view="form" aria-pressed="true">Formulär</button>
+          <button type="button" data-node-info-view="json" aria-pressed="false">JSON</button>
+        </div>
+        <div id="node-info-form" class="nif"></div>
+        <ul id="node-info-errors" class="error nif-errors" role="alert" hidden></ul>
+        <textarea id="editor-node-info" rows="12" spellcheck="false" aria-label="Nodinformation JSON" disabled hidden></textarea>
         <p id="status-node-info" class="editor-status muted" role="status" aria-live="polite">Läser filen från noden…</p>
       </section>
       <p class="muted">Sparning kräver att noden är online. Ändringar i node_info.json måste vara giltig JSON. En säkerhetskopia skapas vid sparning. SvxLink startas inte om automatiskt.</p>
@@ -51,6 +57,7 @@
     <footer>Nodkonfigurationen hanteras via nodagenten.</footer>
   </main>
   <script src="/assets/sidebar.js"></script>
+  <script src="/assets/node-info-form.js"></script>
   <script src="/assets/config.js"></script>
 </body>
 </html>

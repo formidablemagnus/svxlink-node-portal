@@ -87,6 +87,7 @@ STATIC_ASSETS = {
     "index.js": JS,
     "node.js": JS,
     "config.js": JS,
+    "node-info-form.js": JS,
     "schedules.js": JS,
     "dtmf.js": JS,
     "admin.js": JS,

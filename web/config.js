@@ -57,6 +57,7 @@ async function readConfig(documentName, confirmOverwrite = true) {
     editor.disabled = false;
     configHashes[documentName] = result.sha256;
     loadedContents[documentName] = result.content;
+    if (documentName === 'node_info.json' && window.NodeInfoForm) window.NodeInfoForm.refresh();
     document.querySelector(`[data-save="${documentName}"]`).disabled = false;
     configStatus(documentName, 'Filen är inläst. Ändringar sparas först efter att du bekräftat.');
   } catch (error) {
@@ -77,6 +78,11 @@ async function saveConfig(documentName) {
       JSON.parse(editor.value);
     } catch (error) {
       configStatus(documentName, `Ogiltig JSON: ${error.message}`, true);
+      return;
+    }
+    const problems = window.NodeInfoForm ? window.NodeInfoForm.validate() : [];
+    if (problems.length) {
+      configStatus(documentName, `Åtgärda ${problems.length} fel innan du sparar.`, true);
       return;
     }
   }
