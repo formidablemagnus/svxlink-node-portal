@@ -38,7 +38,10 @@ bearer token; only its SHA-256 hash is stored in the portal database.
 
 The portal uses only Python's standard library. Bind it to loopback and put it
 behind a TLS reverse proxy; do not expose its HTTP port to an untrusted network.
-The dashboard and node-list API use HTTP Basic authentication. The portal
+The portal has a login page (`/login`); sessions last 12 hours and are kept in
+an HttpOnly, SameSite=Strict cookie (Secure when the proxy sends
+`X-Forwarded-Proto: https`). Usernames are case-insensitive. After 10 failed
+logins for a username the login is blocked for 5 minutes. The portal
 requires a password of at least 16 characters; protect the portal database and
 environment file.
 
@@ -140,7 +143,7 @@ is hidden.
 
 The administrator from `PORTAL_ADMIN_USER`/`PORTAL_ADMIN_PASSWORD` always
 exists and is the bootstrap `admin`. Under **Användare & granskning**
-(`/admin`) admins can add users (passwords of at least 12 characters, stored as
+(`/admin`) admins can add users (passwords of at least 8 characters with upper- and lower-case letters and digits, stored as
 salted PBKDF2-SHA256 hashes), change passwords and roles, and delete users.
 Role `operator` can view node status and logs and send DTMF sequences (including
 the shared quick buttons) but cannot create or delete nodes, start/stop SvxLink,
@@ -259,7 +262,7 @@ portal validates and stores only service state, radio mode/signal, current
 talkgroup, logic, callsign and a bounded snapshot of recent log lines. Reports
 are considered online for 30 seconds.
 `GET /api/nodes`, `GET /api/nodes/<node-id>`, the dashboard and node detail
-pages require portal Basic authentication. Select a node from the dashboard
+pages require a portal login session. Select a node from the dashboard
 to view its latest service, radio, signal, talkgroup, logic, callsign,
 last-seen information and recent log lines. The agent tails the log,
 reads `STATE_PTY` and polls the service continuously. Radio events and new log
@@ -277,7 +280,7 @@ event.
 ### Live radio stream
 
 While a browser has a node detail page open (`GET /api/nodes/<id>/radio-events`,
-Server-Sent Events, Basic auth), the portal tells the agent to stream radio
+Server-Sent Events, login session), the portal tells the agent to stream radio
 events (`POST /api/v1/agent/radio`: mode, signal level, per-receiver squelch
 and signal, transmitter state). The agent learns this from the `watch` flag in
 its command-poll (default every second, `AGENT_COMMAND_POLL_SECONDS`) and

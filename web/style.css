@@ -32,6 +32,17 @@ nav a:hover, nav a.active { background: #292929; color: white; }
 .node-icon.node-online { vertical-align: middle; }
 .node-offline .node-name { color: var(--muted); }
 .sidebar-footer { margin-top: auto; padding: 12px 10px; color: var(--muted); font-size: 12px; }
+.sidebar-user { margin-bottom: 4px; overflow-wrap: anywhere; }
+nav button.nav-logout { display: block; width: 100%; padding: 9px 11px; border: 0; border-radius: 6px; background: none; color: #ddd; font: inherit; text-align: left; cursor: pointer; }
+nav button.nav-logout:hover { background: #292929; color: white; }
+.login-page { min-height: 100vh; display: grid; place-items: center; }
+.login-box { width: min(380px, calc(100vw - 32px)); margin: 0; padding: 28px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.login-box h1 { margin: 0 0 18px; font-size: 22px; }
+.login-box .brand { padding: 0 0 14px; margin: 0; }
+.login-form label { display: block; margin: 12px 0 6px; color: var(--muted); font-size: 12px; }
+.login-form input { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: #151515; color: var(--text); font: inherit; }
+.login-form button { width: 100%; margin-top: 18px; }
+.login-form .error { min-height: 1.5em; margin: 10px 0 0; }
 main { max-width: 1500px; margin-left: 220px; padding: 30px clamp(20px, 4vw, 60px); }
 header, .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 header { margin-bottom: 27px; }

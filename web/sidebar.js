@@ -1,5 +1,15 @@
 // Gemensam vänstermeny. Alla sidor renderar menyn härifrån så att den är identisk överallt.
 (function () {
+  // Sessionen har gått ut eller saknas: skicka användaren till inloggningssidan.
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = async (...args) => {
+    const response = await nativeFetch(...args);
+    if (response.status === 401 && !window.location.pathname.startsWith('/login')) {
+      const here = window.location.pathname + window.location.search;
+      window.location.replace(`/login?next=${encodeURIComponent(here)}`);
+    }
+    return response;
+  };
   const MENU = [
     {id: 'dashboard', label: 'Dashboard', href: '/'},
     {id: 'dtmf', label: 'DTMF-styrning', href: '/dtmf'},
@@ -74,6 +84,20 @@
         nav.append(link);
       }
     }
+    const logout = document.createElement('button');
+    logout.type = 'button';
+    logout.id = 'logout-button';
+    logout.className = 'nav-logout';
+    logout.textContent = 'Logga ut';
+    logout.addEventListener('click', async () => {
+      logout.disabled = true;
+      try {
+        await fetch('/api/logout', {method: 'POST'});
+      } finally {
+        window.location.assign('/login');
+      }
+    });
+    nav.append(logout);
 
     const footer = document.createElement('div');
     footer.className = 'sidebar-footer';
@@ -129,6 +153,8 @@
   fetch('/api/me', {cache: 'no-store'})
     .then((response) => (response.ok ? response.json() : {}))
     .then((me) => {
+      const logout = document.getElementById('logout-button');
+      if (logout && me.username) logout.textContent = `Logga ut (${me.username})`;
       if (me.role !== 'admin') return;
       document.querySelectorAll('[data-admin-only]').forEach((element) => { element.hidden = false; });
     })

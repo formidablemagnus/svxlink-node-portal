@@ -15,6 +15,7 @@ from http.server import ThreadingHTTPServer
 
 from portal.server import (
     PortalHandler,
+    _login_failures,
     claim_agent_commands,
     complete_agent_command,
     create_backup,
@@ -24,6 +25,21 @@ from portal.server import (
     validate_dtmf_command,
     validate_status,
 )
+
+
+def login_cookie(base_url, username, password):
+    request = Request(
+        f"{base_url}/api/login",
+        data=json.dumps({"username": username, "password": password}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urlopen(request, timeout=5) as response:
+        return response.headers["Set-Cookie"].split(";", 1)[0]
+
+
+def session_header(base_url, basic_credentials):
+    username, password = base64.b64decode(basic_credentials).decode("utf-8").split(":", 1)
+    return {"Cookie": login_cookie(base_url, username, password)}
 
 
 def fetch_asset(base_url, headers, name):
@@ -84,7 +100,7 @@ class PortalStatusTests(unittest.TestCase):
                     b"admin:this-is-a-long-test-password"
                 ).decode()
                 headers = {
-                    "Authorization": f"Basic {credentials_header}",
+                    **session_header(base_url, credentials_header),
                     "Content-Type": "application/json",
                 }
                 with urlopen(
@@ -239,7 +255,7 @@ class PortalStatusTests(unittest.TestCase):
 
                 dashboard_request = Request(
                     f"{base_url}/api/nodes",
-                    headers={"Authorization": f"Basic {credentials}"},
+                    headers={**session_header(base_url, credentials)},
                 )
                 with urlopen(dashboard_request, timeout=2) as response:
                     dashboard = json.loads(response.read().decode("utf-8"))
@@ -249,7 +265,7 @@ class PortalStatusTests(unittest.TestCase):
 
                 detail_request = Request(
                     f"{base_url}/api/nodes/{node['node_id']}",
-                    headers={"Authorization": f"Basic {credentials}"},
+                    headers={**session_header(base_url, credentials)},
                 )
                 with urlopen(detail_request, timeout=2) as response:
                     detail = json.loads(response.read().decode("utf-8"))["node"]
@@ -263,7 +279,7 @@ class PortalStatusTests(unittest.TestCase):
 
                 page_request = Request(
                     f"{base_url}/nodes/{node['node_id']}",
-                    headers={"Authorization": f"Basic {credentials}"},
+                    headers={**session_header(base_url, credentials)},
                 )
                 with urlopen(page_request, timeout=2) as response:
                     self.assertEqual(response.status, 200)
@@ -271,25 +287,25 @@ class PortalStatusTests(unittest.TestCase):
                 self.assertIn("Radiostatus", detail_page)
                 self.assertIn(
                     "/config`",
-                    fetch_asset(base_url, {"Authorization": f"Basic {credentials}"}, "node.js"),
+                    fetch_asset(base_url, {**session_header(base_url, credentials)}, "node.js"),
                 )
                 self.assertNotIn("editor-svxlink", detail_page)
 
                 dashboard_page_request = Request(
                     f"{base_url}/",
-                    headers={"Authorization": f"Basic {credentials}"},
+                    headers={**session_header(base_url, credentials)},
                 )
                 with urlopen(dashboard_page_request, timeout=2) as response:
                     dashboard_page = response.read().decode("utf-8")
                 dashboard_script = fetch_asset(
-                    base_url, {"Authorization": f"Basic {credentials}"}, "index.js"
+                    base_url, {**session_header(base_url, credentials)}, "index.js"
                 )
                 self.assertIn("/config\" aria-label=\"Redigera konfiguration för", dashboard_script)
                 self.assertIn("title=\"Redigera konfiguration\"", dashboard_script)
 
                 config_page_request = Request(
                     f"{base_url}/nodes/{node['node_id']}/config",
-                    headers={"Authorization": f"Basic {credentials}"},
+                    headers={**session_header(base_url, credentials)},
                 )
                 with urlopen(config_page_request, timeout=2) as response:
                     self.assertEqual(response.status, 200)
@@ -298,7 +314,7 @@ class PortalStatusTests(unittest.TestCase):
                 self.assertNotIn("editor-node-info", config_page)
                 nodeinfo_page_request = Request(
                     f"{base_url}/nodes/{node['node_id']}/nodeinfo",
-                    headers={"Authorization": f"Basic {credentials}"},
+                    headers={**session_header(base_url, credentials)},
                 )
                 with urlopen(nodeinfo_page_request, timeout=2) as response:
                     self.assertEqual(response.status, 200)
@@ -306,7 +322,7 @@ class PortalStatusTests(unittest.TestCase):
                 self.assertIn("editor-node-info", nodeinfo_page)
                 self.assertNotIn("editor-svxlink", nodeinfo_page)
                 config_script = fetch_asset(
-                    base_url, {"Authorization": f"Basic {credentials}"}, "config.js"
+                    base_url, {**session_header(base_url, credentials)}, "config.js"
                 )
                 self.assertIn("readConfig(name, false)", config_script)
                 self.assertIn("'node_info.json': 'editor-node-info'", config_script)
@@ -318,7 +334,7 @@ class PortalStatusTests(unittest.TestCase):
                         {"action": "read", "document": "svxlink.conf"}
                     ).encode("utf-8"),
                     headers={
-                        "Authorization": f"Basic {credentials}",
+                        **session_header(base_url, credentials),
                         "Content-Type": "application/json",
                     },
                 )
@@ -351,7 +367,7 @@ class PortalStatusTests(unittest.TestCase):
 
                 config_result_request = Request(
                     f"{base_url}/api/config-commands/{command_id}",
-                    headers={"Authorization": f"Basic {credentials}"},
+                    headers={**session_header(base_url, credentials)},
                 )
                 with urlopen(config_result_request, timeout=2) as response:
                     config_result = json.loads(response.read().decode("utf-8"))
@@ -369,7 +385,7 @@ class PortalStatusTests(unittest.TestCase):
                         }
                     ).encode("utf-8"),
                     headers={
-                        "Authorization": f"Basic {credentials}",
+                        **session_header(base_url, credentials),
                         "Content-Type": "application/json",
                     },
                 )
@@ -390,7 +406,7 @@ class PortalStatusTests(unittest.TestCase):
                     urlopen(
                         Request(
                             f"{base_url}/api/nodes/missing-node",
-                            headers={"Authorization": f"Basic {credentials}"},
+                            headers={**session_header(base_url, credentials)},
                         ),
                         timeout=2,
                     )
@@ -456,7 +472,7 @@ class PortalRadioStreamTests(unittest.TestCase):
                 stream = urlopen(
                     Request(
                         f"{base_url}/api/nodes/{node['node_id']}/radio-events",
-                        headers={"Authorization": f"Basic {credentials}"},
+                        headers={**session_header(base_url, credentials)},
                     ),
                     timeout=5,
                 )
@@ -574,7 +590,7 @@ class PortalServiceCommandTests(unittest.TestCase):
                     b"admin:this-is-a-long-test-password"
                 ).decode()
                 headers = {
-                    "Authorization": f"Basic {credentials}",
+                    **session_header(base_url, credentials),
                     "Content-Type": "application/json",
                 }
                 endpoint = f"{base_url}/api/nodes/{node['node_id']}/service-commands"
@@ -596,7 +612,7 @@ class PortalServiceCommandTests(unittest.TestCase):
                 with urlopen(
                     Request(
                         f"{base_url}/api/commands/{command_id}",
-                        headers={"Authorization": f"Basic {credentials}"},
+                        headers={**session_header(base_url, credentials)},
                     ),
                     timeout=2,
                 ) as response:
@@ -618,7 +634,7 @@ class PortalServiceCommandTests(unittest.TestCase):
                 with urlopen(
                     Request(
                         f"{base_url}/nodes/{node['node_id']}",
-                        headers={"Authorization": f"Basic {credentials}"},
+                        headers={**session_header(base_url, credentials)},
                     ),
                     timeout=2,
                 ) as response:
@@ -626,7 +642,7 @@ class PortalServiceCommandTests(unittest.TestCase):
                 self.assertIn('id="service-start"', detail_page)
                 self.assertIn('id="service-stop"', detail_page)
                 node_script = fetch_asset(
-                    base_url, {"Authorization": f"Basic {credentials}"}, "node.js"
+                    base_url, {**session_header(base_url, credentials)}, "node.js"
                 )
                 self.assertIn("filtered.slice().reverse()", node_script)
                 self.assertIn("waitForServiceStatus(operation !== 'stop')", node_script)
@@ -677,7 +693,7 @@ class PortalDtmfTests(unittest.TestCase):
                 credentials = base64.b64encode(
                     b"admin:this-is-a-long-test-password"
                 ).decode()
-                admin_headers = {"Authorization": f"Basic {credentials}"}
+                admin_headers = {**session_header(base_url, credentials)}
                 agent_headers = {
                     "Authorization": f"Bearer {online_node['token']}"
                 }
@@ -822,7 +838,7 @@ class PortalDtmfTests(unittest.TestCase):
                     b"admin:this-is-a-long-test-password"
                 ).decode()
                 headers = {
-                    "Authorization": f"Basic {credentials}",
+                    **session_header(url.rsplit("/api/", 1)[0], credentials),
                     "Content-Type": "application/json",
                 }
 
@@ -890,12 +906,15 @@ class PortalUserAndAuditTests(unittest.TestCase):
             try:
                 base = f"http://127.0.0.1:{server.server_port}"
 
+                cookies = {}
+
                 def call(user, password, path, body=None, method=None):
-                    token = base64.b64encode(f"{user}:{password}".encode()).decode()
+                    if (user, password) not in cookies:
+                        cookies[(user, password)] = login_cookie(base, user, password)
                     request = Request(
                         base + path,
                         data=json.dumps(body).encode() if body is not None else None,
-                        headers={"Authorization": f"Basic {token}",
+                        headers={"Cookie": cookies[(user, password)],
                                  "Content-Type": "application/json"},
                         method=method,
                     )
@@ -909,15 +928,24 @@ class PortalUserAndAuditTests(unittest.TestCase):
 
                 admin = ("admin", "this-is-a-long-test-password")
                 call(*admin, "/api/users", {
-                    "username": "olle", "password": "operator-password-1", "role": "operator",
+                    "username": "olle", "password": "Operator-password-1", "role": "operator",
                 })
                 self.assertEqual(status(*admin, "/api/users", {
-                    "username": "olle", "password": "operator-password-1", "role": "operator",
+                    "username": "olle", "password": "Operator-password-1", "role": "operator",
                 }), 400)
                 self.assertEqual(status(*admin, "/api/users", {
                     "username": "kort", "password": "short", "role": "operator",
                 }), 400)
-                operator = ("olle", "operator-password-1")
+                for weak in ("alllowercase1", "NOLOWERCASE1", "NoDigitsHere", "Ab1defg"):
+                    self.assertEqual(status(*admin, "/api/users", {
+                        "username": "svag", "password": weak, "role": "operator",
+                    }), 400)
+                call(*admin, "/api/users", {"username": "ok8", "password": "Abcdef12", "role": "operator"})
+                call(*admin, "/api/users/ok8", {"password": "Abcdef34"}, "POST")
+                self.assertEqual(status(*admin, "/api/users/ok8", {"password": "abcdef34"}, "POST"), 400)
+                call(*admin, "/api/users/ok8", {"role": "admin"}, "POST")
+                call(*admin, "/api/users/ok8", None, "DELETE")
+                operator = ("olle", "Operator-password-1")
                 self.assertEqual(call(*operator, "/api/me")["role"], "operator")
                 self.assertEqual(status(*operator, "/api/users"), 403)
                 self.assertEqual(status(*operator, "/api/audit"), 403)
@@ -984,6 +1012,98 @@ class PortalUserAndAuditTests(unittest.TestCase):
                 call(*admin, "/api/users/olle", method="DELETE")
                 self.assertEqual(status(*operator, "/api/me"), 401)
             finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+
+class PortalLoginTests(unittest.TestCase):
+    def test_login_page_sessions_and_case_insensitive_users(self):
+        import http.client
+
+        password = "this-is-a-long-test-password"
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {
+                "PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3"),
+                "PORTAL_ADMIN_USER": "admin",
+                "PORTAL_ADMIN_PASSWORD": password,
+            },
+        ):
+            server = ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_port
+                base = f"http://127.0.0.1:{port}"
+
+                def raw(method, path, body=None, cookie=None):
+                    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                    headers = {"Content-Type": "application/json"}
+                    if cookie:
+                        headers["Cookie"] = cookie
+                    conn.request(
+                        method, path, json.dumps(body) if body is not None else None, headers
+                    )
+                    response = conn.getresponse()
+                    data = response.read()
+                    result = (response.status, response.getheader("Location"),
+                              response.getheader("Set-Cookie"), data)
+                    conn.close()
+                    return result
+
+                self.assertEqual(raw("GET", "/api/nodes")[0], 401)
+                status, location, _, _ = raw("GET", "/nodes/x/config")
+                self.assertEqual(status, 302)
+                self.assertTrue(location.startswith("/login?next="))
+                self.assertEqual(raw("GET", "/login")[0], 200)
+                self.assertEqual(raw("GET", "/assets/login.js")[0], 200)
+                self.assertEqual(raw("GET", "/assets/node.js")[0], 302)
+
+                bad = raw("POST", "/api/login", {"username": "ADMIN", "password": "nope"})
+                self.assertEqual(bad[0], 401)
+
+                status, _, set_cookie, _ = raw(
+                    "POST", "/api/login", {"username": "ADMIN", "password": password}
+                )
+                self.assertEqual(status, 200)
+                self.assertIn("HttpOnly", set_cookie)
+                self.assertIn("SameSite=Strict", set_cookie)
+                admin_cookie = set_cookie.split(";", 1)[0]
+                self.assertEqual(raw("GET", "/api/me", cookie=admin_cookie)[0], 200)
+
+                user_password = "Operator-password-1"
+                created = raw(
+                    "POST", "/api/users",
+                    {"username": "Olle", "password": user_password, "role": "operator"},
+                    admin_cookie,
+                )
+                self.assertEqual(created[0], 201)
+                duplicate = raw(
+                    "POST", "/api/users",
+                    {"username": "OLLE", "password": user_password, "role": "operator"},
+                    admin_cookie,
+                )
+                self.assertEqual(duplicate[0], 400)
+
+                olle_cookie = login_cookie(base, "oLLE", user_password)
+                self.assertEqual(raw("GET", "/api/me", cookie=olle_cookie)[0], 200)
+
+                raw("POST", "/api/logout", cookie=olle_cookie)
+                self.assertEqual(raw("GET", "/api/me", cookie=olle_cookie)[0], 401)
+
+                olle_cookie = login_cookie(base, "olle", user_password)
+                raw("DELETE", "/api/users/olle", cookie=admin_cookie)
+                self.assertEqual(raw("GET", "/api/me", cookie=olle_cookie)[0], 401)
+
+                for _ in range(10):
+                    raw("POST", "/api/login", {"username": "admin", "password": "wrong"})
+                self.assertEqual(
+                    raw("POST", "/api/login", {"username": "admin", "password": password})[0],
+                    429,
+                )
+            finally:
+                _login_failures.clear()
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=2)
