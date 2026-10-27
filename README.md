@@ -142,8 +142,11 @@ The administrator from `PORTAL_ADMIN_USER`/`PORTAL_ADMIN_PASSWORD` always
 exists and is the bootstrap `admin`. Under **Användare & granskning**
 (`/admin`) admins can add users (passwords of at least 12 characters, stored as
 salted PBKDF2-SHA256 hashes), change passwords and roles, and delete users.
-Role `operator` can control nodes (DTMF, service, configuration, schedules) but
-cannot manage users or read the audit log; role `admin` can do both.
+Role `operator` can view node status and logs and send DTMF sequences (including
+the shared quick buttons) but cannot create or delete nodes, start/stop SvxLink,
+edit configuration, node information, schedules or DTMF buttons, manage users, read the audit
+log, or use backup/restore. Those controls are hidden for operators and the
+server rejects the requests with 403. Role `admin` can do everything.
 
 Every command sent to a node (DTMF sequence, service start/stop, configuration
 read/write, schedule read/write), node creation and user changes are recorded

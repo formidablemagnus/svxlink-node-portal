@@ -923,9 +923,21 @@ class PortalUserAndAuditTests(unittest.TestCase):
                 self.assertEqual(status(*operator, "/api/audit"), 403)
                 self.assertEqual(status("olle", "wrong", "/api/me"), 401)
 
-                node = call(*operator, "/api/nodes", {"name": "Audit"})
+                self.assertEqual(status(*operator, "/api/nodes", {"name": "Audit"}), 403)
+                node = call(*admin, "/api/nodes", {"name": "Audit"})
                 self.assertFalse(call(*operator, "/api/nodes")["can_delete_nodes"])
+                self.assertEqual(call(*operator, "/api/nodes")["role"], "operator")
                 node_path = f"/api/nodes/{node['node_id']}"
+                self.assertEqual(call(*operator, node_path)["node"]["id"], node["node_id"])
+                self.assertEqual(status(*operator, f"{node_path}/service-commands",
+                                        {"operation": "stop"}), 403)
+                self.assertEqual(status(*operator, f"{node_path}/config-commands",
+                                        {"action": "read", "document": "node_info.json"}), 403)
+                self.assertEqual(status(*operator, "/api/config-commands/" + "0" * 32), 403)
+                self.assertEqual(status(*operator, "/api/dtmf-buttons", []), 403)
+                self.assertEqual(status(*operator, f"/nodes/{node['node_id']}/config"), 403)
+                self.assertEqual(status(*operator, f"/nodes/{node['node_id']}/nodeinfo"), 403)
+                self.assertEqual(status(*operator, f"/nodes/{node['node_id']}/schedules"), 403)
                 self.assertEqual(status(*operator, node_path, {"password": operator[1]}, "DELETE"), 403)
                 self.assertEqual(status(*admin, node_path, {"password": "wrong-password"}, "DELETE"), 403)
                 with database() as connection:

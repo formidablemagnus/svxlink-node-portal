@@ -92,6 +92,11 @@ STATIC_ASSETS = {
     "dtmf.js": JS,
     "admin.js": JS,
 }
+ADMIN_NODE_PAGES = {
+    "config": "config.html",
+    "nodeinfo": "nodeinfo.html",
+    "schedules": "schedules.html",
+}
 VALID_RADIO_MODES = {"tx", "rx", "idle", "unknown"}
 MAX_RADIO_EVENTS_PER_REQUEST = 100
 MAX_RADIO_VIEWERS_PER_NODE = 20
@@ -1262,15 +1267,11 @@ class PortalHandler(BaseHTTPRequestHandler):
             if len(path_parts) == 1:
                 node_id = path_parts[0]
                 page = "node.html"
-            elif len(path_parts) == 2 and path_parts[1] == "config":
+            elif len(path_parts) == 2 and path_parts[1] in ADMIN_NODE_PAGES:
+                if not self.require_admin(admin_only=True):
+                    return
                 node_id = path_parts[0]
-                page = "config.html"
-            elif len(path_parts) == 2 and path_parts[1] == "nodeinfo":
-                node_id = path_parts[0]
-                page = "nodeinfo.html"
-            elif len(path_parts) == 2 and path_parts[1] == "schedules":
-                node_id = path_parts[0]
-                page = "schedules.html"
+                page = ADMIN_NODE_PAGES[path_parts[1]]
             else:
                 self.send_json(404, {"error": "Sidan hittades inte."})
                 return
@@ -1344,6 +1345,7 @@ class PortalHandler(BaseHTTPRequestHandler):
                 "portal_version": PORTAL_VERSION,
                 "latest_svxlink_version": latest_svxlink_version(),
                 "can_delete_nodes": self.role == "admin",
+                "role": self.role,
             })
         elif path.startswith("/api/nodes/") and path.endswith("/radio-events"):
             node_id = path[len("/api/nodes/"):-len("/radio-events")]
@@ -1360,6 +1362,8 @@ class PortalHandler(BaseHTTPRequestHandler):
             else:
                 self.send_json(200, {"node": node})
         elif path.startswith("/api/config-commands/"):
+            if not self.require_admin(admin_only=True):
+                return
             command_id = path[len("/api/config-commands/"):]
             if not command_id or "/" in command_id:
                 self.send_json(404, {"error": "Konfigurationsåtgärden hittades inte."})
@@ -1496,7 +1500,7 @@ class PortalHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path
         if path == "/api/nodes":
-            if not self.require_admin():
+            if not self.require_admin(admin_only=True):
                 return
             try:
                 payload = self.read_json_body(MAX_REQUEST_BYTES)
@@ -1572,7 +1576,7 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.send_json(200, {"users": list_users()})
             return
         if path == "/api/dtmf-buttons":
-            if not self.require_admin():
+            if not self.require_admin(admin_only=True):
                 return
             try:
                 buttons = validate_dtmf_buttons(self.read_json_body(MAX_REQUEST_BYTES))
@@ -1675,7 +1679,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             return
 
         if path.startswith("/api/nodes/") and path.endswith("/service-commands"):
-            if not self.require_admin():
+            if not self.require_admin(admin_only=True):
                 return
             node_id = path[len("/api/nodes/"):-len("/service-commands")].rstrip("/")
             try:
@@ -1699,7 +1703,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             return
 
         if path.startswith("/api/nodes/") and path.endswith("/config-commands"):
-            if not self.require_admin():
+            if not self.require_admin(admin_only=True):
                 return
             node_id = path[len("/api/nodes/"):-len("/config-commands")].rstrip("/")
             try:

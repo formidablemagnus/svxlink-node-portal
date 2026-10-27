@@ -3,10 +3,10 @@
   const MENU = [
     {id: 'dashboard', label: 'Dashboard', href: '/'},
     {id: 'dtmf', label: 'DTMF-styrning', href: '/dtmf'},
-    {id: 'admin', label: 'Användare & granskning', href: '/admin'},
+    {id: 'admin', label: 'Användare & granskning', href: '/admin', adminOnly: true},
     {heading: 'NODER'},
     {nodes: true},
-    {id: 'settings', label: 'Portalinställningar', href: '/#portal-settings'},
+    {id: 'settings', label: 'Portalinställningar', href: '/#portal-settings', adminOnly: true},
   ];
   const FOOTER = 'Central nodöversikt';
   const SVG = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
@@ -70,6 +70,7 @@
         link.href = item.href;
         link.textContent = item.label;
         if (item.id === active) link.className = 'active';
+        if (item.adminOnly) { link.dataset.adminOnly = ''; link.hidden = true; }
         nav.append(link);
       }
     }
@@ -123,6 +124,15 @@
       if (nav && !nav.querySelector('a')) nav.textContent = 'Kunde inte läsa nodlistan';
     }
   }
+
+  // Admin-only element är dolda från start och visas först när rollen är bekräftad.
+  fetch('/api/me', {cache: 'no-store'})
+    .then((response) => (response.ok ? response.json() : {}))
+    .then((me) => {
+      if (me.role !== 'admin') return;
+      document.querySelectorAll('[data-admin-only]').forEach((element) => { element.hidden = false; });
+    })
+    .catch(() => {});
 
   const aside = document.getElementById('sidebar');
   if (aside) {

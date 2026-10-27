@@ -71,9 +71,9 @@ function renderNodes(nodes, latestSvxlink, canDeleteNodes) {
       <td>${status.node_version ? `v${esc(status.node_version)}` : 'Okänd'}</td>
       <td>${esc(status.svxlink_version || 'Okänd')}${isOutdated(status.svxlink_version, latestSvxlink) ? ` <a class="version-warning" href="https://github.com/sm0svx/svxlink" target="_blank" rel="noopener noreferrer" title="Ny SvxLink-version finns (${esc(latestSvxlink)})" aria-label="Ny SvxLink-version finns (${esc(latestSvxlink)})">&#9888;</a>` : ''}</td>
       <td>${esc(lastSeen)}</td>
-      <td><a class="node-settings" href="/nodes/${encodeURIComponent(node.id)}/config" aria-label="Redigera konfiguration för ${esc(node.name)}" title="Redigera konfiguration">
+      <td>${canDeleteNodes ? `<a class="node-settings" href="/nodes/${encodeURIComponent(node.id)}/config" aria-label="Redigera konfiguration för ${esc(node.name)}" title="Redigera konfiguration">
         <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .33 1.82l.06.06-1.65 2.86-.08-.03a1.65 1.65 0 0 0-1.82.34l-.06.06h-3.3l-.04-.08a1.65 1.65 0 0 0-1.82-.33l-.08.03-2.86-1.65.03-.08a1.65 1.65 0 0 0-.34-1.82l-.06-.06v-3.3l.08-.04a1.65 1.65 0 0 0 .33-1.82l-.03-.08 1.65-2.86.08.03a1.65 1.65 0 0 0 1.82-.34l.06-.06h3.3l.04.08a1.65 1.65 0 0 0 1.82.33l.08-.03 2.86 1.65-.03.08a1.65 1.65 0 0 0 .34 1.82l.06.06v3.3z"></path></svg>
-      </a>${canDeleteNodes ? ` <button type="button" class="delete-node" data-node-id="${esc(node.id)}" data-node-name="${esc(node.name)}" aria-label="Ta bort ${esc(node.name)}" title="Ta bort nod">
+      </a>` : ''}${canDeleteNodes ? ` <button type="button" class="delete-node" data-node-id="${esc(node.id)}" data-node-name="${esc(node.name)}" aria-label="Ta bort ${esc(node.name)}" title="Ta bort nod">
         <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="m19 6-1 14H6L5 6"></path><path d="M10 11v5M14 11v5"></path></svg>
       </button>` : ''}</td>
     </tr>`;
