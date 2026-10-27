@@ -21,7 +21,8 @@ independent version in `agent/VERSION`, which is reported by each node. When a
 release tag is pushed, the version workflow updates the agent version to match
 the tag only if agent code, its configuration helper, installer, or systemd
 unit changed since the previous tag. Portal-only releases leave the agent
-version unchanged.
+version unchanged. Tags containing `-dev` also update the agent version (when
+the agent changed), but only on `develop`; the portal version is left as is.
 
 The agent initiates every network request. A node does not need an inbound
 firewall rule or a public address. Each node has a unique, randomly generated
