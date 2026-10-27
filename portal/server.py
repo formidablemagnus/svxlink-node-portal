@@ -75,6 +75,9 @@ MAX_SCHEDULES = 100
 MAX_NODE_INFO_BYTES = 64 * 1024
 AGENT_COMMAND_TTL_SECONDS = 300
 ONLINE_WINDOW_SECONDS = 30
+MAX_LIVE_LOG_LINES = 200
+MAX_LOG_LINES_PER_REQUEST = 100
+TOUCH_INTERVAL_SECONDS = 5
 CONFIG_DOCUMENTS = {"svxlink.conf", "node_info.json"}
 CSS = "text/css; charset=utf-8"
 JS = "application/javascript; charset=utf-8"
@@ -142,6 +145,59 @@ class RadioHub:
 
 
 RADIO_HUB = RadioHub()
+
+
+class LiveLogStore:
+    """In-memory ring buffer of streamed log lines per node."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.nodes = {}
+
+    def add(self, node_id, lines):
+        with self.lock:
+            buffer = self.nodes.setdefault(node_id, deque(maxlen=MAX_LIVE_LOG_LINES))
+            buffer.extend(lines)
+
+    def seed(self, node_id, lines):
+        with self.lock:
+            if not self.nodes.get(node_id):
+                self.nodes[node_id] = deque(lines, maxlen=MAX_LIVE_LOG_LINES)
+
+    def get(self, node_id):
+        with self.lock:
+            return list(self.nodes.get(node_id, ()))
+
+
+LIVE_LOGS = LiveLogStore()
+_touch_lock = threading.Lock()
+_last_touch = {}
+
+
+def touch_node(node_id):
+    """Refresh last_seen from agent traffic, writing to the database at most every few seconds."""
+    monotonic = time.monotonic()
+    with _touch_lock:
+        if monotonic - _last_touch.get(node_id, -TOUCH_INTERVAL_SECONDS) < TOUCH_INTERVAL_SECONDS:
+            return
+        _last_touch[node_id] = monotonic
+    with database() as connection:
+        connection.execute(
+            "UPDATE nodes SET last_seen = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), node_id),
+        )
+
+
+def validate_log_lines(payload):
+    lines = payload.get("lines") if isinstance(payload, dict) else None
+    if not isinstance(lines, list) or not 1 <= len(lines) <= MAX_LOG_LINES_PER_REQUEST:
+        raise ValueError("'lines' måste vara en lista med 1–100 loggrader.")
+    clean = []
+    for line in lines:
+        if not isinstance(line, str):
+            raise ValueError("Varje loggrad måste vara text.")
+        clean.append(line.encode("utf-8")[:MAX_LOG_LINE_BYTES].decode("utf-8", errors="ignore"))
+    return clean
 COMMAND_CLEANUP_INTERVAL_SECONDS = 60
 _command_cleanup_lock = threading.Lock()
 _last_command_cleanup = {}
@@ -470,13 +526,28 @@ def node_record(row):
             online = (now - seen_at).total_seconds() <= ONLINE_WINDOW_SECONDS
         except ValueError:
             logging.error("Ogiltig last_seen-tid för nod %s.", row["id"])
+    status = json.loads(row["status_json"]) if row["status_json"] else None
+    if status is not None:
+        merge_live_data(row["id"], status)
     return {
         "id": row["id"],
         "name": row["name"],
         "online": online,
         "last_seen": last_seen,
-        "status": json.loads(row["status_json"]) if row["status_json"] else None,
+        "status": status,
     }
+
+
+def merge_live_data(node_id, status):
+    """Overlay streamed radio and log data on the last full status snapshot."""
+    logs = LIVE_LOGS.get(node_id)
+    if logs:
+        status["logs"] = logs
+    with RADIO_HUB.condition:
+        node = RADIO_HUB.nodes.get(node_id)
+        latest = node["latest"] if node else None
+    if latest:
+        status["radio"] = {key: value for key, value in latest.items() if key != "t"}
 
 
 def validate_config_command(payload):
@@ -1168,6 +1239,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             if node_id is None:
                 self.send_json(401, {"error": "Ogiltig nodautentisering."})
                 return
+            touch_node(node_id)
             self.send_json(200, {
                 "commands": claim_agent_commands(node_id),
                 "watch": RADIO_HUB.watched(node_id),
@@ -1670,7 +1742,23 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": str(exc)})
                 return
             RADIO_HUB.add_events(node_id, events)
+            touch_node(node_id)
             self.send_json(200, {"ok": True, "watch": RADIO_HUB.watched(node_id)})
+            return
+
+        if path == "/api/v1/agent/logs":
+            node_id = self.authenticated_agent_id()
+            if node_id is None:
+                self.send_json(401, {"error": "Ogiltig nodautentisering."})
+                return
+            try:
+                lines = validate_log_lines(self.read_json_body(MAX_REQUEST_BYTES))
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            LIVE_LOGS.add(node_id, lines)
+            touch_node(node_id)
+            self.send_json(200, {"ok": True})
             return
 
         if path != "/api/v1/agent/status":
@@ -1686,6 +1774,7 @@ class PortalHandler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
             self.send_json(400, {"error": str(exc)})
             return
+        LIVE_LOGS.seed(node_id, status.get("logs") or [])
         now = datetime.now(timezone.utc).isoformat()
         with database() as connection:
             connection.execute(

@@ -480,6 +480,65 @@ class PortalRadioStreamTests(unittest.TestCase):
                 thread.join(timeout=2)
 
 
+class PortalLiveDataTests(unittest.TestCase):
+    def test_streamed_logs_and_radio_are_merged_into_node_status(self):
+        from portal import server as portal_server
+
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {
+                "PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3"),
+                "PORTAL_ADMIN_USER": "admin",
+                "PORTAL_ADMIN_PASSWORD": "this-is-a-long-test-password",
+            },
+        ):
+            node = provision_node("Live node")
+            node_id = node["node_id"]
+            portal_server._last_touch.clear()
+            with portal_server.database() as connection:
+                connection.execute(
+                    "UPDATE nodes SET status_json = ? WHERE id = ?",
+                    (json.dumps({"logs": ["old"], "radio": {"mode": "idle"}}), node_id),
+                )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://127.0.0.1:{server.server_port}"
+                headers = {
+                    "Authorization": "Bearer " + node["token"],
+                    "Content-Type": "application/json",
+                }
+
+                def post(path, body):
+                    request = Request(
+                        f"{base_url}{path}", data=json.dumps(body).encode("utf-8"),
+                        headers=headers,
+                    )
+                    return urlopen(request, timeout=2)
+
+                post("/api/v1/agent/logs", {"lines": ["a" * 1000, "b"]}).close()
+                post("/api/v1/agent/radio", {"events": [{
+                    "t": 1, "mode": "rx", "signal_level": 10,
+                    "receivers": [], "transmitters": [],
+                }]}).close()
+                with self.assertRaises(HTTPError) as invalid:
+                    post("/api/v1/agent/logs", {"lines": [1]})
+                self.assertEqual(invalid.exception.code, 400)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+            record = portal_server.node_by_id(node_id)
+            self.assertEqual(len(record["status"]["logs"]), 2)
+            self.assertEqual(len(record["status"]["logs"][0]), 512)
+            self.assertEqual(record["status"]["radio"]["mode"], "rx")
+            self.assertNotIn("t", record["status"]["radio"])
+            self.assertTrue(record["online"])
+            portal_server.LIVE_LOGS.nodes.pop(node_id, None)
+
+
 class PortalServiceCommandTests(unittest.TestCase):
     def test_admin_service_request_is_queued_for_agent(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(

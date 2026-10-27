@@ -14,11 +14,13 @@ from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from agent import schedules
-from agent.collector import Collector, read_config_sections
+from agent.collector import Collector, clean_text, read_config_sections
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 NETWORK_ERRORS = (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError)
 RADIO_BATCH_SIZE = 50
+LOG_BATCH_SIZE = 50
+LOG_LINE_BYTES = 512
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 CONFIG_DOCUMENTS = {"svxlink.conf", "node_info.json"}
 CONFIG_HELPER = "/usr/local/libexec/svxlink-node-portal-config"
@@ -336,41 +338,38 @@ class NodeAgent:
         self.status_url = f"{portal_url}/api/v1/agent/status"
         self.radio_url = f"{portal_url}/api/v1/agent/radio"
         self.commands_url = f"{portal_url}/api/v1/agent/commands"
-        self.watch = threading.Event()
+        self.logs_url = f"{portal_url}/api/v1/agent/logs"
         self.status_wake = threading.Event()
         self.radio_wake = threading.Event()
         self.radio_lock = threading.Lock()
         self.radio_queue = deque(maxlen=500)
+        self.log_wake = threading.Event()
+        self.log_lock = threading.Lock()
+        self.log_queue = deque(maxlen=1000)
         self.collector = Collector(
             config_path, log_path, service,
             on_radio=self.queue_radio, on_change=lambda reason: self.status_wake.set(),
+            on_log=self.queue_logs,
         )
 
     def queue_radio(self, snapshot):
-        if self.watch.is_set():
-            with self.radio_lock:
-                self.radio_queue.append({"t": int(time.time() * 1000), **snapshot})
-            self.radio_wake.set()
+        with self.radio_lock:
+            self.radio_queue.append({"t": int(time.time() * 1000), **snapshot})
+        self.radio_wake.set()
 
-    def set_watch(self, value):
-        if value and not self.watch.is_set():
-            self.watch.set()
-            self.queue_radio(self.collector.radio_snapshot())
-        elif not value and self.watch.is_set():
-            self.watch.clear()
-            with self.radio_lock:
-                self.radio_queue.clear()
+    def queue_logs(self, lines):
+        with self.log_lock:
+            self.log_queue.extend(clean_text(line, LOG_LINE_BYTES) for line in lines)
+        self.log_wake.set()
 
     def status_loop(self):
         while True:
             try:
                 status = self.collector.snapshot()
-                response = request_json(
+                request_json(
                     self.status_url, payload={"node_id": self.node_id, **status},
                     headers=self.headers,
                 )
-                if isinstance(response, dict):
-                    self.set_watch(response.get("watch") is True)
             except NETWORK_ERRORS as exc:
                 logging.warning("Kunde inte rapportera status till portalen: %s", exc)
             self.status_wake.wait(self.status_interval)
@@ -382,8 +381,6 @@ class NodeAgent:
         while True:
             self.radio_wake.wait(1)
             self.radio_wake.clear()
-            if not self.watch.is_set():
-                continue
             with self.radio_lock:
                 batch = [
                     self.radio_queue.popleft()
@@ -393,11 +390,9 @@ class NodeAgent:
             if not batch:
                 continue
             try:
-                response = request_json(
+                request_json(
                     self.radio_url, payload={"events": batch}, headers=self.headers, timeout=5
                 )
-                if isinstance(response, dict):
-                    self.set_watch(response.get("watch") is True)
             except NETWORK_ERRORS as exc:
                 logging.warning("Kunde inte strömma radiodata till portalen: %s", exc)
                 time.sleep(1)
@@ -406,19 +401,43 @@ class NodeAgent:
             else:
                 time.sleep(0.1)
 
+    def log_loop(self):
+        while True:
+            self.log_wake.wait(1)
+            self.log_wake.clear()
+            with self.log_lock:
+                batch = [
+                    self.log_queue.popleft()
+                    for _ in range(min(LOG_BATCH_SIZE, len(self.log_queue)))
+                ]
+                more = bool(self.log_queue)
+            if not batch:
+                continue
+            try:
+                request_json(
+                    self.logs_url, payload={"lines": batch}, headers=self.headers, timeout=5
+                )
+            except NETWORK_ERRORS as exc:
+                logging.warning("Kunde inte strömma loggrader till portalen: %s", exc)
+                time.sleep(1)
+            if more:
+                self.log_wake.set()
+            else:
+                time.sleep(0.2)
+
     def command_loop(self):
         while True:
-            watch = process_agent_commands(
+            process_agent_commands(
                 self.commands_url, self.commands_url, self.headers, self.config_path
             )
-            if watch is not None:
-                self.set_watch(watch)
             time.sleep(self.command_interval)
 
     def run(self):
         self.collector.start()
+        self.queue_radio(self.collector.radio_snapshot())
         for target, name in (
             (self.radio_loop, "radio-stream"),
+            (self.log_loop, "log-stream"),
             (self.command_loop, "commands"),
         ):
             threading.Thread(target=target, name=name, daemon=True).start()
@@ -438,7 +457,7 @@ def run():
         os.environ.get("SVXLINK_CONFIG", "/etc/svxlink/svxlink.conf"),
         os.environ.get("SVXLINK_LOGFILE", "/var/log/svxlink"),
         os.environ.get("SVXLINK_SERVICE", "svxlink"),
-        max(1, int(os.environ.get("AGENT_INTERVAL_SECONDS", "5"))),
+        max(1, int(os.environ.get("AGENT_INTERVAL_SECONDS", "30"))),
         max(0.5, float(os.environ.get("AGENT_COMMAND_POLL_SECONDS", "1"))),
     ).run()
 

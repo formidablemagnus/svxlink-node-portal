@@ -256,10 +256,14 @@ are considered online for 30 seconds.
 `GET /api/nodes`, `GET /api/nodes/<node-id>`, the dashboard and node detail
 pages require portal Basic authentication. Select a node from the dashboard
 to view its latest service, radio, signal, talkgroup, logic, callsign,
-last-seen information and up to 50 recent log lines. The agent tails the log,
-reads `STATE_PTY` and polls the service continuously; it sends a status report
-immediately on changes (and at least every `AGENT_INTERVAL_SECONDS`, default 5).
-The portal stores only the latest report, not a long-term log archive.
+last-seen information and recent log lines. The agent tails the log,
+reads `STATE_PTY` and polls the service continuously. Radio events and new log
+lines are streamed to the portal at all times (`/api/v1/agent/radio` and
+`/api/v1/agent/logs`) and kept in portal memory (last 200 lines per node), so
+node pages load instantly. A full status report is sent every
+`AGENT_INTERVAL_SECONDS` (default 30) and immediately on service, error or
+talkgroup changes. After a portal restart the last full report is used until
+new data arrives. The portal stores no long-term log archive.
 Administrators can remove a node from the dashboard after confirming their
 password. `DELETE /api/nodes/<node-id>` is admin-only and requires the password
 in a JSON body; removal also clears queued agent commands and records an audit
