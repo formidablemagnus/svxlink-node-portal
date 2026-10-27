@@ -27,18 +27,24 @@ from portal.version import read_version
 
 ROOT = Path(__file__).resolve().parent.parent
 PORTAL_VERSION = read_version()
-SVXLINK_VERSIONS_URL = "https://api.github.com/repos/sm0svx/svxlink/releases/latest"
+SVXLINK_RELEASE_URL = "https://api.github.com/repos/sm0svx/svxlink/releases/latest"
+SVXLINK_VERSIONS_URL = "https://raw.githubusercontent.com/sm0svx/svxlink/%s/src/versions"
 _latest_svxlink = {"version": "", "next": 0.0, "lock": threading.Lock(), "busy": False}
 
 
 def _fetch_latest_svxlink_version():
     version = ""
     try:
-        request = urllib.request.Request(SVXLINK_VERSIONS_URL, headers={"User-Agent": "svxlink-node-portal"})
+        request = urllib.request.Request(SVXLINK_RELEASE_URL, headers={"User-Agent": "svxlink-node-portal"})
         with urllib.request.urlopen(request, timeout=10) as response:
             release = json.loads(response.read(262144).decode("utf-8", "replace"))
-        match = re.fullmatch(r"v?(\d+(?:\.\d+)+)", str(release.get("tag_name", "")))
-        version = match.group(1) if match and not release.get("prerelease") else ""
+        tag = str(release.get("tag_name", ""))
+        if re.fullmatch(r"v?\d+(?:\.\d+)+", tag) and not release.get("prerelease"):
+            request = urllib.request.Request(SVXLINK_VERSIONS_URL % tag, headers={"User-Agent": "svxlink-node-portal"})
+            with urllib.request.urlopen(request, timeout=10) as response:
+                text = response.read(65536).decode("utf-8", "replace")
+            match = re.search(r"^SVXLINK=(\d+(?:\.\d+)+)\s*$", text, re.MULTILINE)
+            version = match.group(1) if match else ""
     except Exception as exc:
         logging.warning("Kunde inte hämta senaste SvxLink-version: %s", exc)
     with _latest_svxlink["lock"]:
