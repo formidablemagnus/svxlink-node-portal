@@ -8,6 +8,10 @@ const configNames = {
   'node_info.json': 'editor-node-info'
 };
 document.getElementById('detail-link').href = `/nodes/${encodeURIComponent(nodeId)}`;
+const otherLink = document.getElementById('other-config-link');
+if (otherLink) {
+  otherLink.href = `/nodes/${encodeURIComponent(nodeId)}/${otherLink.dataset.page}`;
+}
 
 function configStatus(documentName, message, isError = false) {
   const element = document.getElementById(
@@ -125,5 +129,6 @@ document.querySelectorAll('[data-save]').forEach((button) => {
   button.addEventListener('click', () => saveConfig(button.dataset.save));
 });
 loadNode();
-readConfig('svxlink.conf', false);
-readConfig('node_info.json', false);
+Object.keys(configNames)
+  .filter((name) => document.getElementById(configNames[name]))
+  .forEach((name) => readConfig(name, false));

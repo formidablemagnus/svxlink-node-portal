@@ -13,15 +13,18 @@
       <div>
         <p class="eyebrow">NODKONFIGURATION</p>
         <h1 id="node-name">Hämtar nod…</h1>
-        <p class="muted">Redigera konfigurationsfiler på noden</p>
+        <p class="muted">Redigera svxlink.conf på noden</p>
       </div>
-      <a id="detail-link" class="button-link" href="#">Tillbaka till noddetaljer</a>
+      <div class="config-actions">
+        <a id="other-config-link" class="button-link" data-page="nodeinfo" href="#">Nodinformation</a>
+        <a id="detail-link" class="button-link" href="#">Tillbaka till noddetaljer</a>
+      </div>
     </header>
     <section class="panel">
       <div class="panel-heading">
         <div>
-          <h2>Konfigurationsfiler</h2>
-          <p class="muted">Filerna läses automatiskt från noden när sidan öppnas.</p>
+          <h2>svxlink.conf</h2>
+          <p class="muted">Filen läses automatiskt från noden när sidan öppnas.</p>
         </div>
       </div>
       <section class="config-editor" aria-labelledby="svxlink-config-title">
@@ -35,29 +38,11 @@
         <textarea id="editor-svxlink" rows="18" spellcheck="false" aria-label="SvxLink-konfiguration" disabled></textarea>
         <p id="status-svxlink" class="editor-status muted" role="status" aria-live="polite">Läser filen från noden…</p>
       </section>
-      <section class="config-editor" aria-labelledby="node-info-title">
-        <div class="config-editor-heading">
-          <h3 id="node-info-title">/etc/svxlink/node_info.json</h3>
-          <div class="config-actions">
-            <button type="button" data-load="node_info.json">Läs om från nod</button>
-            <button type="button" data-save="node_info.json" disabled>Spara ändringar</button>
-          </div>
-        </div>
-        <div class="config-actions nif-tabs" role="group" aria-label="Vy">
-          <button type="button" data-node-info-view="form" aria-pressed="true">Formulär</button>
-          <button type="button" data-node-info-view="json" aria-pressed="false">JSON</button>
-        </div>
-        <div id="node-info-form" class="nif"></div>
-        <ul id="node-info-errors" class="error nif-errors" role="alert" hidden></ul>
-        <textarea id="editor-node-info" rows="12" spellcheck="false" aria-label="Nodinformation JSON" disabled hidden></textarea>
-        <p id="status-node-info" class="editor-status muted" role="status" aria-live="polite">Läser filen från noden…</p>
-      </section>
-      <p class="muted">Sparning kräver att noden är online. Ändringar i node_info.json måste vara giltig JSON. En säkerhetskopia skapas vid sparning. SvxLink startas inte om automatiskt.</p>
+      <p class="muted">Sparning kräver att noden är online. En säkerhetskopia skapas vid sparning. SvxLink startas inte om automatiskt.</p>
     </section>
     <footer>Nodkonfigurationen hanteras via nodagenten.</footer>
   </main>
   <script src="/assets/sidebar.js"></script>
-  <script src="/assets/node-info-form.js"></script>
   <script src="/assets/config.js"></script>
 </body>
 </html>

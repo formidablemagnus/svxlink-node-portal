@@ -295,11 +295,21 @@ class PortalStatusTests(unittest.TestCase):
                     self.assertEqual(response.status, 200)
                     config_page = response.read().decode("utf-8")
                 self.assertIn("Läser filen från noden", config_page)
+                self.assertNotIn("editor-node-info", config_page)
+                nodeinfo_page_request = Request(
+                    f"{base_url}/nodes/{node['node_id']}/nodeinfo",
+                    headers={"Authorization": f"Basic {credentials}"},
+                )
+                with urlopen(nodeinfo_page_request, timeout=2) as response:
+                    self.assertEqual(response.status, 200)
+                    nodeinfo_page = response.read().decode("utf-8")
+                self.assertIn("editor-node-info", nodeinfo_page)
+                self.assertNotIn("editor-svxlink", nodeinfo_page)
                 config_script = fetch_asset(
                     base_url, {"Authorization": f"Basic {credentials}"}, "config.js"
                 )
-                self.assertIn("readConfig('svxlink.conf', false)", config_script)
-                self.assertIn("readConfig('node_info.json', false)", config_script)
+                self.assertIn("readConfig(name, false)", config_script)
+                self.assertIn("'node_info.json': 'editor-node-info'", config_script)
                 self.assertIn("editor-svxlink", config_page)
 
                 read_command_request = Request(

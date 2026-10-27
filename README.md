@@ -154,11 +154,13 @@ are stored in clear text.
 
 ### Edit node configuration
 
-The node detail page links to a separate configuration page. Portal
-administrators can read and edit
-`/etc/svxlink/svxlink.conf` and `/etc/svxlink/node_info.json`. The node must be
-online to read or process an edit request. Both files are loaded automatically
-when the configuration page opens. Each save creates a timestamped backup
+The node detail page links to two separate pages: a configuration page for
+`/etc/svxlink/svxlink.conf` (`/nodes/<id>/config`) and a node information page
+for `/etc/svxlink/node_info.json` (`/nodes/<id>/nodeinfo`, with a form editor
+and validation plus a raw JSON view). Portal
+administrators can read and edit both files. The node must be
+online to read or process an edit request. Each file is loaded automatically
+when its page opens. Each save creates a timestamped backup
 beside the original file and preserves its owner and mode. A checksum check
 prevents saving if the file changed after it was loaded; reload it and reapply
 your edits in that case. `node_info.json` must remain valid JSON. Saving does

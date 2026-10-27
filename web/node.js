@@ -5,6 +5,7 @@ const SERVICE_LABELS = {
   deactivating: 'Stoppas', reloading: 'Laddar om', unknown: 'Okänd',
 };
 document.getElementById('config-link').href = `/nodes/${encodeURIComponent(nodeId)}/config`;
+document.getElementById('nodeinfo-link').href = `/nodes/${encodeURIComponent(nodeId)}/nodeinfo`;
 document.getElementById('schedules-link').href = `/nodes/${encodeURIComponent(nodeId)}/schedules`;
 const dtmfForm = document.getElementById('dtmf-form');
 const dtmfInput = document.getElementById('dtmf-sequence');

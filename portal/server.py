@@ -1265,6 +1265,9 @@ class PortalHandler(BaseHTTPRequestHandler):
             elif len(path_parts) == 2 and path_parts[1] == "config":
                 node_id = path_parts[0]
                 page = "config.html"
+            elif len(path_parts) == 2 and path_parts[1] == "nodeinfo":
+                node_id = path_parts[0]
+                page = "nodeinfo.html"
             elif len(path_parts) == 2 and path_parts[1] == "schedules":
                 node_id = path_parts[0]
                 page = "schedules.html"
