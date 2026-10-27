@@ -281,12 +281,13 @@ class Collector:
     """Gathers node information in background threads and reports changes via callbacks."""
 
     def __init__(self, config_path, log_path, service="svxlink",
-                 on_radio=None, on_change=None):
+                 on_radio=None, on_change=None, on_log=None):
         self.config_path = config_path
         self.log_path = log_path
         self.service = service
         self.on_radio = on_radio or (lambda snapshot: None)
         self.on_change = on_change or (lambda reason: None)
+        self.on_log = on_log or (lambda lines: None)
         self._lock = threading.Lock()
         self._radio = RadioState()
         self._radio_error = "Väntar på status från SvxLink."
@@ -363,8 +364,6 @@ class Collector:
             self._last_snapshot = snapshot
         if changed:
             self.on_radio(snapshot)
-            if snapshot["mode"] != "unknown":
-                self.on_change("radio")
         return changed
 
     def _set_radio_unavailable(self, error):
@@ -589,7 +588,14 @@ class Collector:
         with self._lock:
             error_changed = error != self._log_error
             self._log_error = error
-        if new_lines or error_changed:
+        lines = [line for line in new_lines if line]
+        if lines:
+            self.on_log(lines)
+        # Lines are streamed separately; only talkgroup changes need a status report.
+        talkgroup_changed = any(
+            TG_EVENT_RE.search(line) or SELECT_TG_RE.search(line) for line in lines
+        )
+        if talkgroup_changed or error_changed:
             self.on_change("log")
 
     def snapshot(self, max_logs=50, max_line_bytes=512):

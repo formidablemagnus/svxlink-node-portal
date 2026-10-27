@@ -5,6 +5,7 @@ const SERVICE_LABELS = {
   deactivating: 'Stoppas', reloading: 'Laddar om', unknown: 'Okänd',
 };
 document.getElementById('config-link').href = `/nodes/${encodeURIComponent(nodeId)}/config`;
+document.getElementById('nodeinfo-link').href = `/nodes/${encodeURIComponent(nodeId)}/nodeinfo`;
 document.getElementById('schedules-link').href = `/nodes/${encodeURIComponent(nodeId)}/schedules`;
 const dtmfForm = document.getElementById('dtmf-form');
 const dtmfInput = document.getElementById('dtmf-sequence');
@@ -62,7 +63,6 @@ function startRadioStream() {
   if (radioSource) radioSource.close();
   radioSource = new EventSource(`/api/nodes/${encodeURIComponent(nodeId)}/radio-events`);
   radioSource.addEventListener('radio', (event) => {
-    if (!nodeFresh) return;
     liveRadioAt = Date.now();
     setText('live-state', 'Live');
     renderRadio(JSON.parse(event.data));
@@ -71,14 +71,7 @@ function startRadioStream() {
 }
 
 let allLogs = [];
-const ERROR_RE = /\b(error|fatal|critical|\*{3})\b|\bfel\b/i;
-const WARNING_RE = /\b(warn(ing)?|varning)\b/i;
-
-function logLevel(line) {
-  if (ERROR_RE.test(line)) return 'error';
-  if (WARNING_RE.test(line)) return 'warning';
-  return 'info';
-}
+const logLevel = window.SvxLogic.logLevel;
 
 function renderLogs() {
   const query = document.getElementById('log-search').value;
@@ -106,6 +99,8 @@ function renderLogs() {
   if (filtered.length) {
     for (const line of filtered.slice().reverse()) {
       const item = document.createElement('li');
+      const lineLevel = logLevel(line);
+      if (lineLevel !== 'info') item.className = `log-${lineLevel}`;
       item.textContent = line;
       logList.append(item);
     }
@@ -208,32 +203,7 @@ function renderNodeInfo(info) {
   }
 }
 
-let nodeFresh = false;
-let baselineLastSeen;
-const loadStartedAt = Date.now();
-const FRESH_TIMEOUT_MS = 15000;
-
-function setLoadingDots() {
-  for (const [id, text] of [['online', 'Nodanslutning'], ['service', 'SvxLink-tjänst']]) {
-    const el = document.getElementById(id);
-    el.className = 'status-dot loading';
-    el.title = `${text}: laddar`;
-    el.setAttribute('aria-label', `${text}: laddar`);
-  }
-}
-
 function renderNode(node) {
-  if (!nodeFresh) {
-    if (baselineLastSeen === undefined) baselineLastSeen = node.last_seen ?? null;
-    nodeFresh = !node.online || (node.last_seen ?? null) !== baselineLastSeen
-      || Date.now() - loadStartedAt > FRESH_TIMEOUT_MS;
-    if (!nodeFresh) {
-      setText('node-name', node.name);
-      setLoadingDots();
-      setText('updated', 'Väntar på uppdatering från noden…');
-      return;
-    }
-  }
   const status = node.status || {};
   const radio = status.radio || {};
   const lastSeen = node.last_seen ? new Date(node.last_seen).toLocaleString('sv-SE') : 'Aldrig';

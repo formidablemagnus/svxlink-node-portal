@@ -1,12 +1,22 @@
 // Gemensam vänstermeny. Alla sidor renderar menyn härifrån så att den är identisk överallt.
 (function () {
+  // Sessionen har gått ut eller saknas: skicka användaren till inloggningssidan.
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = async (...args) => {
+    const response = await nativeFetch(...args);
+    if (response.status === 401 && !window.location.pathname.startsWith('/login')) {
+      const here = window.location.pathname + window.location.search;
+      window.location.replace(`/login?next=${encodeURIComponent(here)}`);
+    }
+    return response;
+  };
   const MENU = [
     {id: 'dashboard', label: 'Dashboard', href: '/'},
     {id: 'dtmf', label: 'DTMF-styrning', href: '/dtmf'},
-    {id: 'admin', label: 'Användare & granskning', href: '/admin'},
+    {id: 'admin', label: 'Användare & granskning', href: '/admin', adminOnly: true},
     {heading: 'NODER'},
     {nodes: true},
-    {id: 'settings', label: 'Portalinställningar', href: '/#portal-settings'},
+    {id: 'settings', label: 'Portalinställningar', href: '/#portal-settings', adminOnly: true},
   ];
   const FOOTER = 'Central nodöversikt';
   const SVG = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
@@ -25,8 +35,17 @@
     return 'unknown';
   }
 
+  const ERROR_RE = /\b(error|fatal|critical|\*{3})\b|\bfel\b/i;
+  const WARNING_RE = /\b(warn(ing)?|varning)\b/i;
+
+  function logLevel(line) {
+    if (ERROR_RE.test(line)) return 'error';
+    if (WARNING_RE.test(line)) return 'warning';
+    return 'info';
+  }
+
   const LOGIC_TITLES = {simplex: 'Simplexlogik', repeater: 'Repeaterlogik', unknown: 'Okänd logik'};
-  window.SvxLogic = {ICONS, logicType, LOGIC_TITLES};
+  window.SvxLogic = {ICONS, logicType, LOGIC_TITLES, logLevel};
 
   function currentPath() {
     return window.location.pathname;
@@ -39,7 +58,7 @@
     brand.href = '/';
     brand.append('SvxLink ');
     const brandSpan = document.createElement('span');
-    brandSpan.textContent = 'PORTAL';
+    brandSpan.textContent = 'MANAGER';
     brand.append(brandSpan);
 
     const nav = document.createElement('nav');
@@ -61,9 +80,24 @@
         link.href = item.href;
         link.textContent = item.label;
         if (item.id === active) link.className = 'active';
+        if (item.adminOnly) { link.dataset.adminOnly = ''; link.hidden = true; }
         nav.append(link);
       }
     }
+    const logout = document.createElement('button');
+    logout.type = 'button';
+    logout.id = 'logout-button';
+    logout.className = 'nav-logout';
+    logout.textContent = 'Logga ut';
+    logout.addEventListener('click', async () => {
+      logout.disabled = true;
+      try {
+        await fetch('/api/logout', {method: 'POST'});
+      } finally {
+        window.location.assign('/login');
+      }
+    });
+    nav.append(logout);
 
     const footer = document.createElement('div');
     footer.className = 'sidebar-footer';
@@ -87,7 +121,7 @@
       const href = `/nodes/${encodeURIComponent(node.id)}`;
       link.className = `nav-node ${node.online ? 'node-online' : 'node-offline'}`;
       link.href = href;
-      if (currentPath() === href || currentPath() === `${href}/config` || currentPath() === `${href}/schedules`) link.classList.add('active');
+      if (currentPath() === href || currentPath() === `${href}/config` || currentPath() === `${href}/nodeinfo` || currentPath() === `${href}/schedules`) link.classList.add('active');
       link.title = `${LOGIC_TITLES[type]} – ${node.online ? 'online' : 'offline'}`;
       const icon = document.createElement('span');
       icon.className = `node-icon logic-${type}`;
@@ -107,13 +141,24 @@
       const data = await response.json();
       renderNodes(data.nodes);
       const version = document.getElementById('portal-version');
-      if (version && data.portal_version) version.textContent = `Portal v${data.portal_version}`;
+      if (version && data.portal_version) version.textContent = `Manager v${data.portal_version}`;
       document.dispatchEvent(new CustomEvent('nodes-loaded', {detail: data.nodes}));
     } catch (error) {
       const nav = document.getElementById('node-nav');
       if (nav && !nav.querySelector('a')) nav.textContent = 'Kunde inte läsa nodlistan';
     }
   }
+
+  // Admin-only element är dolda från start och visas först när rollen är bekräftad.
+  fetch('/api/me', {cache: 'no-store'})
+    .then((response) => (response.ok ? response.json() : {}))
+    .then((me) => {
+      const logout = document.getElementById('logout-button');
+      if (logout && me.username) logout.textContent = `Logga ut (${me.username})`;
+      if (me.role !== 'admin') return;
+      document.querySelectorAll('[data-admin-only]').forEach((element) => { element.hidden = false; });
+    })
+    .catch(() => {});
 
   const aside = document.getElementById('sidebar');
   if (aside) {

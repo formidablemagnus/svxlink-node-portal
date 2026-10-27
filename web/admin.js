@@ -73,7 +73,7 @@ async function userAction(action, message) {
 }
 
 function changePassword(username) {
-  const password = window.prompt(`Nytt lösenord för ${username} (minst 12 tecken):`);
+  const password = window.prompt(`Nytt lösenord för ${username} (minst 8 tecken med stora och små bokstäver samt siffror):`);
   if (!password) return;
   userAction(() => api(`/api/users/${encodeURIComponent(username)}`, {method: 'POST', body: JSON.stringify({password})}),
     'Lösenordet är uppdaterat.');

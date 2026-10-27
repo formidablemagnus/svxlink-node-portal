@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Small standard-library HTTP server for the SvxLink node portal."""
 import argparse
-import base64
 import hashlib
 import hmac
 import json
@@ -18,9 +17,10 @@ import uuid
 from collections import deque
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from portal.reflector import REFLECTOR_HUB
 from portal.version import read_version
@@ -69,12 +69,15 @@ MAX_AUDIT_ROWS = 5000
 AUDIT_PAGE_SIZE = 200
 USER_ROLES = ("admin", "operator")
 USERNAME_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,40}")
-MIN_USER_PASSWORD_LENGTH = 12
+MIN_USER_PASSWORD_LENGTH = 8
 PASSWORD_ITERATIONS = 200_000
 MAX_SCHEDULES = 100
 MAX_NODE_INFO_BYTES = 64 * 1024
 AGENT_COMMAND_TTL_SECONDS = 300
 ONLINE_WINDOW_SECONDS = 30
+MAX_LIVE_LOG_LINES = 200
+MAX_LOG_LINES_PER_REQUEST = 100
+TOUCH_INTERVAL_SECONDS = 5
 CONFIG_DOCUMENTS = {"svxlink.conf", "node_info.json"}
 CSS = "text/css; charset=utf-8"
 JS = "application/javascript; charset=utf-8"
@@ -84,9 +87,24 @@ STATIC_ASSETS = {
     "index.js": JS,
     "node.js": JS,
     "config.js": JS,
+    "node-info-form.js": JS,
     "schedules.js": JS,
     "dtmf.js": JS,
     "admin.js": JS,
+    "login.js": JS,
+}
+PUBLIC_ASSETS = {"style.css", "login.js"}
+SESSION_COOKIE = "svx_session"
+SESSION_TTL_SECONDS = 12 * 3600
+SESSION_REFRESH_SECONDS = 300
+LOGIN_MAX_FAILURES = 10
+LOGIN_WINDOW_SECONDS = 300
+_login_failures = {}
+_login_lock = threading.Lock()
+ADMIN_NODE_PAGES = {
+    "config": "config.html",
+    "nodeinfo": "nodeinfo.html",
+    "schedules": "schedules.html",
 }
 VALID_RADIO_MODES = {"tx", "rx", "idle", "unknown"}
 MAX_RADIO_EVENTS_PER_REQUEST = 100
@@ -142,6 +160,59 @@ class RadioHub:
 
 
 RADIO_HUB = RadioHub()
+
+
+class LiveLogStore:
+    """In-memory ring buffer of streamed log lines per node."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.nodes = {}
+
+    def add(self, node_id, lines):
+        with self.lock:
+            buffer = self.nodes.setdefault(node_id, deque(maxlen=MAX_LIVE_LOG_LINES))
+            buffer.extend(lines)
+
+    def seed(self, node_id, lines):
+        with self.lock:
+            if not self.nodes.get(node_id):
+                self.nodes[node_id] = deque(lines, maxlen=MAX_LIVE_LOG_LINES)
+
+    def get(self, node_id):
+        with self.lock:
+            return list(self.nodes.get(node_id, ()))
+
+
+LIVE_LOGS = LiveLogStore()
+_touch_lock = threading.Lock()
+_last_touch = {}
+
+
+def touch_node(node_id):
+    """Refresh last_seen from agent traffic, writing to the database at most every few seconds."""
+    monotonic = time.monotonic()
+    with _touch_lock:
+        if monotonic - _last_touch.get(node_id, -TOUCH_INTERVAL_SECONDS) < TOUCH_INTERVAL_SECONDS:
+            return
+        _last_touch[node_id] = monotonic
+    with database() as connection:
+        connection.execute(
+            "UPDATE nodes SET last_seen = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), node_id),
+        )
+
+
+def validate_log_lines(payload):
+    lines = payload.get("lines") if isinstance(payload, dict) else None
+    if not isinstance(lines, list) or not 1 <= len(lines) <= MAX_LOG_LINES_PER_REQUEST:
+        raise ValueError("'lines' måste vara en lista med 1–100 loggrader.")
+    clean = []
+    for line in lines:
+        if not isinstance(line, str):
+            raise ValueError("Varje loggrad måste vara text.")
+        clean.append(line.encode("utf-8")[:MAX_LOG_LINE_BYTES].decode("utf-8", errors="ignore"))
+    return clean
 COMMAND_CLEANUP_INTERVAL_SECONDS = 60
 _command_cleanup_lock = threading.Lock()
 _last_command_cleanup = {}
@@ -196,6 +267,23 @@ def connect_database():
             created_at TEXT NOT NULL
         )"""
     )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS sessions (
+            token_hash TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        )"""
+    )
+    try:
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS portal_users_username_nocase "
+            "ON portal_users (username COLLATE NOCASE)"
+        )
+    except sqlite3.IntegrityError:
+        # Äldre databaser kan innehålla namn som bara skiljer sig i skiftläge;
+        # create_user kontrollerar dubbletter även utan indexet.
+        pass
     connection.execute(
         """CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -470,13 +558,28 @@ def node_record(row):
             online = (now - seen_at).total_seconds() <= ONLINE_WINDOW_SECONDS
         except ValueError:
             logging.error("Ogiltig last_seen-tid för nod %s.", row["id"])
+    status = json.loads(row["status_json"]) if row["status_json"] else None
+    if status is not None:
+        merge_live_data(row["id"], status)
     return {
         "id": row["id"],
         "name": row["name"],
         "online": online,
         "last_seen": last_seen,
-        "status": json.loads(row["status_json"]) if row["status_json"] else None,
+        "status": status,
     }
+
+
+def merge_live_data(node_id, status):
+    """Overlay streamed radio and log data on the last full status snapshot."""
+    logs = LIVE_LOGS.get(node_id)
+    if logs:
+        status["logs"] = logs
+    with RADIO_HUB.condition:
+        node = RADIO_HUB.nodes.get(node_id)
+        latest = node["latest"] if node else None
+    if latest:
+        status["radio"] = {key: value for key, value in latest.items() if key != "t"}
 
 
 def validate_config_command(payload):
@@ -732,7 +835,11 @@ def validate_backup(backup):
     if len(clean["dtmf_buttons"]) > MAX_DTMF_BUTTONS:
         raise ValueError("Säkerhetskopian innehåller för många DTMF-knappar.")
     for table, key in (("nodes", "id"), ("portal_users", "username")):
-        if len({row[key] for row in clean[table]}) != len(clean[table]):
+        keys = {
+            row[key].lower() if table == "portal_users" else row[key]
+            for row in clean[table]
+        }
+        if len(keys) != len(clean[table]):
             raise ValueError(f"Säkerhetskopian innehåller dubbletter i {table}.")
     if len({row["token_hash"] for row in clean["nodes"]}) != len(clean["nodes"]):
         raise ValueError("Säkerhetskopian innehåller dubbletter i nodernas token.")
@@ -785,9 +892,13 @@ def validate_user_fields(username, password, role):
         raise ValueError("Användarnamnet måste vara 1–40 tecken: A–Z, 0–9, punkt, understreck eller bindestreck.")
     if not isinstance(password, str) or not (
         MIN_USER_PASSWORD_LENGTH <= len(password) <= 200
+        and re.search(r"[a-z]", password)
+        and re.search(r"[A-Z]", password)
+        and re.search(r"[0-9]", password)
     ):
         raise ValueError(
-            f"Lösenordet måste innehålla {MIN_USER_PASSWORD_LENGTH}–200 tecken."
+            f"Lösenordet måste innehålla {MIN_USER_PASSWORD_LENGTH}–200 tecken "
+            "med minst en stor bokstav, en liten bokstav och en siffra."
         )
     if role not in USER_ROLES:
         raise ValueError("Rollen måste vara admin eller operator.")
@@ -805,9 +916,13 @@ def list_users():
 
 def create_user(actor, username, password, role):
     validate_user_fields(username, password, role)
-    if username == admin_credentials()[0]:
+    if username.lower() == admin_credentials()[0].lower():
         raise ValueError("Användarnamnet är reserverat för huvudadministratören.")
     with database() as connection:
+        if connection.execute(
+            "SELECT 1 FROM portal_users WHERE username = ? COLLATE NOCASE", (username,)
+        ).fetchone():
+            raise ValueError("Användaren finns redan.")
         try:
             connection.execute(
                 "INSERT INTO portal_users (username, password_hash, role, created_at) "
@@ -823,14 +938,16 @@ def create_user(actor, username, password, role):
 def update_user(actor, username, password=None, role=None):
     with database() as connection:
         row = connection.execute(
-            "SELECT role FROM portal_users WHERE username = ?", (username,)
+            "SELECT username, role FROM portal_users WHERE username = ? COLLATE NOCASE",
+            (username,),
         ).fetchone()
         if row is None:
             return False
+        username = row["username"]
         new_role = role if role is not None else row["role"]
         if password is None:
             password_hash = None
-            validate_user_fields(username, "x" * MIN_USER_PASSWORD_LENGTH, new_role)
+            validate_user_fields(username, "Aa1" + "x" * MIN_USER_PASSWORD_LENGTH, new_role)
         else:
             validate_user_fields(username, password, new_role)
             password_hash = hash_password(password)
@@ -838,6 +955,9 @@ def update_user(actor, username, password=None, role=None):
             connection.execute(
                 "UPDATE portal_users SET password_hash = ?, role = ? WHERE username = ?",
                 (password_hash, new_role, username),
+            )
+            connection.execute(
+                "DELETE FROM sessions WHERE username = ? COLLATE NOCASE", (username,)
             )
         else:
             connection.execute(
@@ -849,11 +969,21 @@ def update_user(actor, username, password=None, role=None):
 
 def delete_user(actor, username):
     with database() as connection:
+        row = connection.execute(
+            "SELECT username FROM portal_users WHERE username = ? COLLATE NOCASE",
+            (username,),
+        ).fetchone()
+        if row is None:
+            return False
+        username = row["username"]
         cursor = connection.execute(
             "DELETE FROM portal_users WHERE username = ?", (username,)
         )
         if cursor.rowcount != 1:
             return False
+        connection.execute(
+            "DELETE FROM sessions WHERE username = ? COLLATE NOCASE", (username,)
+        )
         record_audit(connection, actor, "user.delete", username)
     return True
 
@@ -875,21 +1005,124 @@ def delete_node(actor, node_id):
     return True
 
 
-def authenticate_user(username, password):
-    """Return the role for valid credentials, otherwise None."""
+def _same_text(first, second):
+    return hmac.compare_digest(first.encode("utf-8"), second.encode("utf-8"))
+
+
+def authenticate(username, password):
+    """Return (canonical username, role) for valid credentials, otherwise None.
+
+    Usernames are matched case-insensitively."""
+    if not isinstance(username, str) or not isinstance(password, str):
+        return None
     expected_user, expected_password = admin_credentials()
-    user_ok = hmac.compare_digest(username, expected_user)
-    password_ok = hmac.compare_digest(password, expected_password)
+    user_ok = _same_text(username.lower(), expected_user.lower())
+    password_ok = _same_text(password, expected_password)
     if user_ok and password_ok:
-        return "admin"
+        return expected_user, "admin"
     with database() as connection:
         row = connection.execute(
-            "SELECT password_hash, role FROM portal_users WHERE username = ?",
+            "SELECT username, password_hash, role FROM portal_users "
+            "WHERE username = ? COLLATE NOCASE",
             (username,),
         ).fetchone()
     if row is not None and verify_password(password, row["password_hash"]):
-        return row["role"]
+        return row["username"], row["role"]
     return None
+
+
+def authenticate_user(username, password):
+    """Return the role for valid credentials, otherwise None."""
+    result = authenticate(username, password)
+    return result[1] if result else None
+
+
+def resolve_user(username):
+    """Return (canonical username, role) for an existing account."""
+    expected_user = admin_credentials()[0]
+    if username.lower() == expected_user.lower():
+        return expected_user, "admin"
+    with database() as connection:
+        row = connection.execute(
+            "SELECT username, role FROM portal_users WHERE username = ? COLLATE NOCASE",
+            (username,),
+        ).fetchone()
+    return (row["username"], row["role"]) if row else None
+
+
+def create_session(username):
+    token = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    with database() as connection:
+        connection.execute(
+            "DELETE FROM sessions WHERE expires_at < ?", (now.isoformat(),)
+        )
+        connection.execute(
+            "INSERT INTO sessions (token_hash, username, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                hashlib.sha256(token.encode("utf-8")).hexdigest(),
+                username,
+                now.isoformat(),
+                (now + timedelta(seconds=SESSION_TTL_SECONDS)).isoformat(),
+            ),
+        )
+    return token
+
+
+def session_user(token):
+    """Return (username, role) for a valid session token and extend it."""
+    if not token:
+        return None
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc)
+    with database() as connection:
+        row = connection.execute(
+            "SELECT username, expires_at FROM sessions WHERE token_hash = ?",
+            (token_hash,),
+        ).fetchone()
+    if row is None:
+        return None
+    expires_at = datetime.fromisoformat(row["expires_at"])
+    user = resolve_user(row["username"]) if expires_at > now else None
+    with database() as connection:
+        if user is None:
+            connection.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+        elif (expires_at - now).total_seconds() < SESSION_TTL_SECONDS - SESSION_REFRESH_SECONDS:
+            connection.execute(
+                "UPDATE sessions SET expires_at = ? WHERE token_hash = ?",
+                ((now + timedelta(seconds=SESSION_TTL_SECONDS)).isoformat(), token_hash),
+            )
+    return user
+
+
+def destroy_session(token):
+    if token:
+        with database() as connection:
+            connection.execute(
+                "DELETE FROM sessions WHERE token_hash = ?",
+                (hashlib.sha256(token.encode("utf-8")).hexdigest(),),
+            )
+
+
+def login_throttled(key):
+    now = time.monotonic()
+    with _login_lock:
+        attempts = [t for t in _login_failures.get(key, []) if now - t < LOGIN_WINDOW_SECONDS]
+        _login_failures[key] = attempts
+        return len(attempts) >= LOGIN_MAX_FAILURES
+
+
+def record_login_failure(key):
+    with _login_lock:
+        if len(_login_failures) > 10000:
+            _login_failures.clear()
+        _login_failures.setdefault(key, []).append(time.monotonic())
+
+
+def clear_login_failures(key):
+    with _login_lock:
+        _login_failures.pop(key, None)
 
 
 def enqueue_agent_command(node_id, payload, actor="system"):
@@ -1106,14 +1339,81 @@ class PortalHandler(BaseHTTPRequestHandler):
     def log_message(self, format_string, *args):
         logging.info("%s - %s", self.address_string(), format_string % args)
 
-    def send_json(self, status, payload):
+    def send_json(self, status, payload, headers=()):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for name, value in headers:
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
+
+    def send_redirect(self, location):
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+
+    def send_asset(self, asset):
+        body = (WEB_ROOT / asset).read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", STATIC_ASSETS[asset])
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def session_token(self):
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+        except Exception:
+            return ""
+        morsel = cookie.get(SESSION_COOKIE)
+        return morsel.value if morsel else ""
+
+    def session_cookie(self, value, max_age):
+        parts = [f"{SESSION_COOKIE}={value}", "Path=/", "HttpOnly", "SameSite=Strict",
+                 f"Max-Age={max_age}"]
+        if self.headers.get("X-Forwarded-Proto", "").lower() == "https":
+            parts.append("Secure")
+        return ("Set-Cookie", "; ".join(parts))
+
+    def handle_login(self):
+        try:
+            payload = self.read_json_body(MAX_REQUEST_BYTES)
+            if (
+                not isinstance(payload, dict)
+                or set(payload) != {"username", "password"}
+                or not isinstance(payload["username"], str)
+                or not isinstance(payload["password"], str)
+            ):
+                raise ValueError("Ange användarnamn och lösenord.")
+        except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+            self.send_json(400, {"error": str(exc)})
+            return
+        username = payload["username"].strip()
+        key = (self.client_address[0], username.lower())
+        if login_throttled(key):
+            self.send_json(429, {"error": "För många inloggningsförsök. Försök igen om en stund."})
+            return
+        result = None
+        if len(username) <= 100 and len(payload["password"]) <= 200:
+            result = authenticate(username, payload["password"])
+        if result is None:
+            record_login_failure(key)
+            self.send_json(401, {"error": "Fel användarnamn eller lösenord."})
+            return
+        clear_login_failures(key)
+        token = create_session(result[0])
+        self.send_json(
+            200,
+            {"username": result[0], "role": result[1]},
+            [self.session_cookie(token, SESSION_TTL_SECONDS)],
+        )
 
     def read_json_body(self, max_bytes):
         try:
@@ -1138,25 +1438,16 @@ class PortalHandler(BaseHTTPRequestHandler):
         return node["id"] if node else None
 
     def require_admin(self, admin_only=False):
-        header = self.headers.get("Authorization", "")
-        try:
-            scheme, encoded = header.split(" ", 1)
-            if scheme.lower() != "basic":
-                raise ValueError("Wrong authorization scheme")
-            decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
-            username, password = decoded.split(":", 1)
-        except (ValueError, UnicodeError):
-            username, password = "", ""
-        role = authenticate_user(username, password)
-        if role is None:
-            self.send_response(401)
-            self.send_header("WWW-Authenticate", 'Basic realm="SvxLink Portal"')
-            self.send_header("Content-Length", "0")
-            self.end_headers()
+        user = session_user(self.session_token())
+        if user is None:
+            if self.command == "GET" and not urlparse(self.path).path.startswith("/api/"):
+                target = self.path if self.path.startswith("/") else "/"
+                self.send_redirect(f"/login?next={quote(target, safe='')}")
+            else:
+                self.send_json(401, {"error": "Inloggning krävs."})
             return False
-        self.actor = username
-        self.role = role
-        if admin_only and role != "admin":
+        self.actor, self.role = user
+        if admin_only and self.role != "admin":
             self.send_json(403, {"error": "Kräver administratörsbehörighet."})
             return False
         return True
@@ -1168,10 +1459,26 @@ class PortalHandler(BaseHTTPRequestHandler):
             if node_id is None:
                 self.send_json(401, {"error": "Ogiltig nodautentisering."})
                 return
+            touch_node(node_id)
             self.send_json(200, {
                 "commands": claim_agent_commands(node_id),
                 "watch": RADIO_HUB.watched(node_id),
             })
+            return
+        if path == "/login":
+            if session_user(self.session_token()) is not None:
+                self.send_redirect("/")
+                return
+            body = (WEB_ROOT / "login.html").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path.startswith("/assets/") and path[len("/assets/"):] in PUBLIC_ASSETS:
+            self.send_asset(path[len("/assets/"):])
             return
         if not self.require_admin():
             return
@@ -1189,12 +1496,11 @@ class PortalHandler(BaseHTTPRequestHandler):
             if len(path_parts) == 1:
                 node_id = path_parts[0]
                 page = "node.html"
-            elif len(path_parts) == 2 and path_parts[1] == "config":
+            elif len(path_parts) == 2 and path_parts[1] in ADMIN_NODE_PAGES:
+                if not self.require_admin(admin_only=True):
+                    return
                 node_id = path_parts[0]
-                page = "config.html"
-            elif len(path_parts) == 2 and path_parts[1] == "schedules":
-                node_id = path_parts[0]
-                page = "schedules.html"
+                page = ADMIN_NODE_PAGES[path_parts[1]]
             else:
                 self.send_json(404, {"error": "Sidan hittades inte."})
                 return
@@ -1217,14 +1523,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         elif path.startswith("/assets/") and path[len("/assets/"):] in STATIC_ASSETS:
-            asset = path[len("/assets/"):]
-            body = (WEB_ROOT / asset).read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", STATIC_ASSETS[asset])
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
-            self.wfile.write(body)
+            self.send_asset(path[len("/assets/"):])
         elif path == "/admin":
             if not self.require_admin(admin_only=True):
                 return
@@ -1268,6 +1567,7 @@ class PortalHandler(BaseHTTPRequestHandler):
                 "portal_version": PORTAL_VERSION,
                 "latest_svxlink_version": latest_svxlink_version(),
                 "can_delete_nodes": self.role == "admin",
+                "role": self.role,
             })
         elif path.startswith("/api/nodes/") and path.endswith("/radio-events"):
             node_id = path[len("/api/nodes/"):-len("/radio-events")]
@@ -1284,6 +1584,8 @@ class PortalHandler(BaseHTTPRequestHandler):
             else:
                 self.send_json(200, {"node": node})
         elif path.startswith("/api/config-commands/"):
+            if not self.require_admin(admin_only=True):
+                return
             command_id = path[len("/api/config-commands/"):]
             if not command_id or "/" in command_id:
                 self.send_json(404, {"error": "Konfigurationsåtgärden hittades inte."})
@@ -1419,8 +1721,15 @@ class PortalHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/api/login":
+            self.handle_login()
+            return
+        if path == "/api/logout":
+            destroy_session(self.session_token())
+            self.send_json(200, {"ok": True}, [self.session_cookie("", 0)])
+            return
         if path == "/api/nodes":
-            if not self.require_admin():
+            if not self.require_admin(admin_only=True):
                 return
             try:
                 payload = self.read_json_body(MAX_REQUEST_BYTES)
@@ -1496,7 +1805,7 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.send_json(200, {"users": list_users()})
             return
         if path == "/api/dtmf-buttons":
-            if not self.require_admin():
+            if not self.require_admin(admin_only=True):
                 return
             try:
                 buttons = validate_dtmf_buttons(self.read_json_body(MAX_REQUEST_BYTES))
@@ -1599,7 +1908,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             return
 
         if path.startswith("/api/nodes/") and path.endswith("/service-commands"):
-            if not self.require_admin():
+            if not self.require_admin(admin_only=True):
                 return
             node_id = path[len("/api/nodes/"):-len("/service-commands")].rstrip("/")
             try:
@@ -1623,7 +1932,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             return
 
         if path.startswith("/api/nodes/") and path.endswith("/config-commands"):
-            if not self.require_admin():
+            if not self.require_admin(admin_only=True):
                 return
             node_id = path[len("/api/nodes/"):-len("/config-commands")].rstrip("/")
             try:
@@ -1670,7 +1979,23 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": str(exc)})
                 return
             RADIO_HUB.add_events(node_id, events)
+            touch_node(node_id)
             self.send_json(200, {"ok": True, "watch": RADIO_HUB.watched(node_id)})
+            return
+
+        if path == "/api/v1/agent/logs":
+            node_id = self.authenticated_agent_id()
+            if node_id is None:
+                self.send_json(401, {"error": "Ogiltig nodautentisering."})
+                return
+            try:
+                lines = validate_log_lines(self.read_json_body(MAX_REQUEST_BYTES))
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            LIVE_LOGS.add(node_id, lines)
+            touch_node(node_id)
+            self.send_json(200, {"ok": True})
             return
 
         if path != "/api/v1/agent/status":
@@ -1686,6 +2011,7 @@ class PortalHandler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
             self.send_json(400, {"error": str(exc)})
             return
+        LIVE_LOGS.seed(node_id, status.get("logs") or [])
         now = datetime.now(timezone.utc).isoformat()
         with database() as connection:
             connection.execute(

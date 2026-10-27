@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Nodstatus – SvxLink Portal</title>
+  <title>Nodstatus – SvxLink Manager</title>
   <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
@@ -21,8 +21,9 @@
                     <span class="status-item"><span id="service" class="status-dot loading" role="img" aria-label="SvxLink-tjänst: laddar" title="SvxLink-tjänst: laddar"></span><small>SvxLink</small></span>
         </span>
         <div id="updated" class="muted" role="status" aria-live="polite">Ansluter…</div>
-        <a id="schedules-link" class="button-link" href="#">Schemaläggning</a>
-        <a id="config-link" class="button-link" href="#" aria-label="Redigera nodkonfiguration">Konfiguration</a>
+        <a id="schedules-link" class="button-link" href="#" data-admin-only hidden>Schemaläggning</a>
+        <a id="config-link" class="button-link" href="#" data-admin-only hidden aria-label="Redigera nodkonfiguration">Konfiguration</a>
+        <a id="nodeinfo-link" class="button-link" href="#" data-admin-only hidden aria-label="Redigera nodinformation">Nodinformation</a>
       </div>
     </header>
     <section class="panel compact">
@@ -66,7 +67,7 @@
       </form>
       <h3>Snabbknappar</h3>
       <div id="dtmf-presets" class="preset-buttons"><span class="muted">Laddar knappar…</span></div>
-      <p class="muted">Knapparna är gemensamma för alla noder och hanteras under <a href="/dtmf">DTMF-styrning</a>.</p>
+      <p class="muted">Knapparna är gemensamma för alla noder.</p>
     </section>
     <div class="panel-grid">
     <section class="panel">
@@ -80,7 +81,7 @@
         <div><dt>Nod-ID</dt><dd id="node-id">—</dd></div>
       </dl>
     </section>
-    <section class="panel">
+    <section class="panel" data-admin-only hidden>
       <div class="panel-heading">
         <div><h2>SvxLink-tjänst</h2><p class="muted">Starta eller stäng av SvxLink på den här noden.</p></div>
       </div>

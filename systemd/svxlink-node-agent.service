@@ -1,5 +1,5 @@
 [Unit]
-Description=SvxLink Node Portal Agent
+Description=SvxLink Manager Agent
 After=network-online.target svxlink.service
 Wants=network-online.target
 

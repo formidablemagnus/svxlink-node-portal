@@ -1,3 +1,4 @@
+[hidden] { display: none !important; }
 :root {
   color-scheme: dark;
   --background: #171717;
@@ -31,6 +32,17 @@ nav a:hover, nav a.active { background: #292929; color: white; }
 .node-icon.node-online { vertical-align: middle; }
 .node-offline .node-name { color: var(--muted); }
 .sidebar-footer { margin-top: auto; padding: 12px 10px; color: var(--muted); font-size: 12px; }
+.sidebar-user { margin-bottom: 4px; overflow-wrap: anywhere; }
+nav button.nav-logout { display: block; width: 100%; padding: 9px 11px; border: 0; border-radius: 6px; background: none; color: #ddd; font: inherit; text-align: left; cursor: pointer; }
+nav button.nav-logout:hover { background: #292929; color: white; }
+.login-page { min-height: 100vh; display: grid; place-items: center; }
+.login-box { width: min(380px, calc(100vw - 32px)); margin: 0; padding: 28px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.login-box h1 { margin: 0 0 18px; font-size: 22px; }
+.login-box .brand { padding: 0 0 14px; margin: 0; }
+.login-form label { display: block; margin: 12px 0 6px; color: var(--muted); font-size: 12px; }
+.login-form input { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: #151515; color: var(--text); font: inherit; }
+.login-form button { width: 100%; margin-top: 18px; }
+.login-form .error { min-height: 1.5em; margin: 10px 0 0; }
 main { max-width: 1500px; margin-left: 220px; padding: 30px clamp(20px, 4vw, 60px); }
 header, .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 header { margin-bottom: 27px; }
@@ -120,6 +132,11 @@ td .state::before { width: 12px; height: 12px; }
 .data-table th { color: var(--muted); font-weight: 600; }
 .log-lines li:last-child { border-bottom: 0; }
 .log-lines li.muted { color: var(--muted); font-family: inherit; }
+.log-lines li.log-warning { border-left: 4px solid #f5c518; }
+.log-lines li.log-error { border-left: 4px solid #e5484d; }
+.status-badge.log-ok { background: #1f9d55; }
+.status-badge.log-warning { background: #f5c518; color: #1a1a1a; }
+.status-badge.log-error { background: #e5484d; }
 .config-editor { margin-top: 20px; }
 .config-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 9px; }
 .config-editor-heading h3 { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
@@ -130,6 +147,21 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .service-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .config-editor textarea { display: block; width: 100%; min-height: 220px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: #151515; color: var(--text); font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; resize: vertical; }
 .config-editor textarea:disabled { opacity: .7; }
+.config-editor textarea[hidden], .nif[hidden], .nif-errors[hidden] { display: none; }
+.nif-tabs { margin-bottom: 10px; }
+.nif-tabs button[aria-pressed="true"] { border-color: var(--blue); background: #3a4668; }
+.nif-group { margin: 0 0 14px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; }
+.nif-group legend { padding: 0 6px; color: var(--muted); font-size: 12px; }
+.nif-card { margin-bottom: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: #1b1b1b; }
+.nif-sub { margin-top: 10px; }
+.nif-sub h4, .nif-sub h5 { margin: 0 0 6px; font-size: 13px; }
+.nif-sub h5 { color: var(--muted); font-weight: 600; }
+.nif-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-bottom: 8px; }
+.nif-field { display: flex; flex-direction: column; gap: 3px; min-width: 120px; flex: 1 1 140px; color: var(--muted); font-size: 12px; }
+.nif-field input:not([type="checkbox"]) { padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: #151515; color: var(--text); font: inherit; }
+.nif-check { flex-direction: row; align-items: center; gap: 8px; flex: 0 0 auto; }
+.nif-remove { border-color: #6b3a3d; }
+.nif-errors { margin: 8px 0 0; padding-left: 20px; }
 .editor-status { min-height: 1.5em; margin: 6px 0 0; overflow-wrap: anywhere; }
 .dtmf-form { max-width: 680px; }
 .dtmf-form > label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }

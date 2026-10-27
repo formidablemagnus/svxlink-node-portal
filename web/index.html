@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SvxLink nätverksportal</title>
+  <title>SvxLink Manager</title>
   <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
@@ -30,14 +30,14 @@
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>NOD</th><th>STATUS</th><th>SVX TJÄNST</th><th>RADIO</th><th>SIGNAL RX</th><th>TALGRUPP</th><th>NODVERSION</th><th>SVXLINK</th><th>SENAST SEDD</th><th><span class="visually-hidden">Åtgärder</span></th></tr></thead>
-          <tbody id="nodes"><tr><td colspan="10" class="muted">Hämtar nodstatus…</td></tr></tbody>
+          <thead><tr><th>NOD</th><th>STATUS</th><th>SVX TJÄNST</th><th>RADIO</th><th>SIGNAL RX</th><th>TALGRUPP</th><th>LOGG</th><th>NODVERSION</th><th>SVXLINK</th><th>SENAST SEDD</th><th><span class="visually-hidden">Åtgärder</span></th></tr></thead>
+          <tbody id="nodes"><tr><td colspan="11" class="muted">Hämtar nodstatus…</td></tr></tbody>
         </table>
       </div>
       <p id="error" class="error" role="status" aria-live="polite"></p>
     </section>
-    <section id="portal-settings" class="panel settings">
-      <h2>Portalinställningar</h2>
+    <section id="portal-settings" class="panel settings" data-admin-only hidden>
+      <h2>Lägg till nod</h2>
       <form id="create-node-form" class="node-form">
         <p class="muted">Skapa en nodidentitet här i portalen. När noden skapats visas nod-ID och token, som behövs när agenten installeras på SvxLink-noden. Token visas bara en gång.</p>
         <label for="new-node-name">Nodnamn</label>

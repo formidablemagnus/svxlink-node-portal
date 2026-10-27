@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nodinformation – SvxLink Manager</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <aside class="sidebar" id="sidebar" data-active="node"></aside>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">NODINFORMATION</p>
+        <h1 id="node-name">Hämtar nod…</h1>
+        <p class="muted">Redigera node_info.json på noden</p>
+      </div>
+      <div class="config-actions">
+        <a id="other-config-link" class="button-link" data-page="config" href="#">svxlink.conf</a>
+        <a id="detail-link" class="button-link" href="#">Tillbaka till noddetaljer</a>
+      </div>
+    </header>
+    <section class="panel">
+      <section class="config-editor" aria-labelledby="node-info-title">
+        <div class="config-editor-heading">
+          <h3 id="node-info-title">/etc/svxlink/node_info.json</h3>
+          <div class="config-actions">
+            <button type="button" data-load="node_info.json">Läs om från nod</button>
+            <button type="button" data-save="node_info.json" disabled>Spara ändringar</button>
+          </div>
+        </div>
+        <div class="config-actions nif-tabs" role="group" aria-label="Vy">
+          <button type="button" data-node-info-view="form" aria-pressed="true">Formulär</button>
+          <button type="button" data-node-info-view="json" aria-pressed="false">JSON</button>
+        </div>
+        <div id="node-info-form" class="nif"></div>
+        <ul id="node-info-errors" class="error nif-errors" role="alert" hidden></ul>
+        <textarea id="editor-node-info" rows="12" spellcheck="false" aria-label="Nodinformation JSON" disabled hidden></textarea>
+        <p id="status-node-info" class="editor-status muted" role="status" aria-live="polite">Läser filen från noden…</p>
+      </section>
+      <p class="muted">Filen läses automatiskt från noden när sidan öppnas. Sparning kräver att noden är online och att filen är giltig. En säkerhetskopia skapas vid sparning.</p>
+    </section>
+    <footer>Nodinformationen hanteras via nodagenten.</footer>
+  </main>
+  <script src="/assets/sidebar.js"></script>
+  <script src="/assets/node-info-form.js"></script>
+  <script src="/assets/config.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Logga in – SvxLink Manager</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body class="login-page">
+  <main class="login-box">
+    <p class="brand">SvxLink <span>MANAGER</span></p>
+    <h1>Logga in</h1>
+    <form id="login-form" class="login-form">
+      <label for="login-username">Användarnamn</label>
+      <input id="login-username" name="username" type="text" maxlength="100" required autofocus autocomplete="username" autocapitalize="none" spellcheck="false">
+      <label for="login-password">Lösenord</label>
+      <input id="login-password" name="password" type="password" maxlength="200" required autocomplete="current-password">
+      <button id="login-submit" type="submit">Logga in</button>
+      <p id="login-error" class="error" role="alert" aria-live="assertive"></p>
+    </form>
+  </main>
+  <script src="/assets/login.js"></script>
+</body>
+</html>

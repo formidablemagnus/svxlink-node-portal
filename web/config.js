@@ -8,6 +8,10 @@ const configNames = {
   'node_info.json': 'editor-node-info'
 };
 document.getElementById('detail-link').href = `/nodes/${encodeURIComponent(nodeId)}`;
+const otherLink = document.getElementById('other-config-link');
+if (otherLink) {
+  otherLink.href = `/nodes/${encodeURIComponent(nodeId)}/${otherLink.dataset.page}`;
+}
 
 function configStatus(documentName, message, isError = false) {
   const element = document.getElementById(
@@ -57,6 +61,7 @@ async function readConfig(documentName, confirmOverwrite = true) {
     editor.disabled = false;
     configHashes[documentName] = result.sha256;
     loadedContents[documentName] = result.content;
+    if (documentName === 'node_info.json' && window.NodeInfoForm) window.NodeInfoForm.refresh();
     document.querySelector(`[data-save="${documentName}"]`).disabled = false;
     configStatus(documentName, 'Filen är inläst. Ändringar sparas först efter att du bekräftat.');
   } catch (error) {
@@ -77,6 +82,11 @@ async function saveConfig(documentName) {
       JSON.parse(editor.value);
     } catch (error) {
       configStatus(documentName, `Ogiltig JSON: ${error.message}`, true);
+      return;
+    }
+    const problems = window.NodeInfoForm ? window.NodeInfoForm.validate() : [];
+    if (problems.length) {
+      configStatus(documentName, `Åtgärda ${problems.length} fel innan du sparar.`, true);
       return;
     }
   }
@@ -119,5 +129,6 @@ document.querySelectorAll('[data-save]').forEach((button) => {
   button.addEventListener('click', () => saveConfig(button.dataset.save));
 });
 loadNode();
-readConfig('svxlink.conf', false);
-readConfig('node_info.json', false);
+Object.keys(configNames)
+  .filter((name) => document.getElementById(configNames[name]))
+  .forEach((name) => readConfig(name, false));

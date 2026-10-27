@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Användare och granskning – SvxLink Portal</title>
+  <title>Användare och granskning – SvxLink Manager</title>
   <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
@@ -22,7 +22,7 @@
         <p class="muted">Administratörer kan hantera användare och granskningsloggen. Operatörer kan styra noder men inte administrera portalen. Huvudadministratören anges i <code>/etc/default/svxlink-node-portal</code> och kan inte ändras här.</p></div></div>
       <form id="user-form" class="admin-form">
         <input id="user-name" type="text" placeholder="Användarnamn" maxlength="40" pattern="[A-Za-z0-9._-]{1,40}" autocomplete="off" required aria-label="Användarnamn">
-        <input id="user-password" type="password" placeholder="Lösenord (minst 12 tecken)" minlength="12" maxlength="200" autocomplete="new-password" required aria-label="Lösenord">
+        <input id="user-password" type="password" placeholder="Lösenord (minst 8 tecken, stora och små bokstäver samt siffror)" minlength="8" maxlength="200" autocomplete="new-password" required aria-label="Lösenord">
         <select id="user-role" aria-label="Roll">
           <option value="operator">Operatör</option>
           <option value="admin">Administratör</option>

@@ -1,4 +1,4 @@
-# SvxLink Node Portal
+# SvxLink Manager
 
 Central dashboard and outbound node agent for managing multiple SvxLink nodes.
 The portal reports service, radio, talkgroup, logic and callsign status, lets
@@ -38,7 +38,10 @@ bearer token; only its SHA-256 hash is stored in the portal database.
 
 The portal uses only Python's standard library. Bind it to loopback and put it
 behind a TLS reverse proxy; do not expose its HTTP port to an untrusted network.
-The dashboard and node-list API use HTTP Basic authentication. The portal
+The portal has a login page (`/login`); sessions last 12 hours and are kept in
+an HttpOnly, SameSite=Strict cookie (Secure when the proxy sends
+`X-Forwarded-Proto: https`). Usernames are case-insensitive. After 10 failed
+logins for a username the login is blocked for 5 minutes. The portal
 requires a password of at least 16 characters; protect the portal database and
 environment file.
 
@@ -140,10 +143,13 @@ is hidden.
 
 The administrator from `PORTAL_ADMIN_USER`/`PORTAL_ADMIN_PASSWORD` always
 exists and is the bootstrap `admin`. Under **Användare & granskning**
-(`/admin`) admins can add users (passwords of at least 12 characters, stored as
+(`/admin`) admins can add users (passwords of at least 8 characters with upper- and lower-case letters and digits, stored as
 salted PBKDF2-SHA256 hashes), change passwords and roles, and delete users.
-Role `operator` can control nodes (DTMF, service, configuration, schedules) but
-cannot manage users or read the audit log; role `admin` can do both.
+Role `operator` can view node status and logs and send DTMF sequences (including
+the shared quick buttons) but cannot create or delete nodes, start/stop SvxLink,
+edit configuration, node information, schedules or DTMF buttons, manage users, read the audit
+log, or use backup/restore. Those controls are hidden for operators and the
+server rejects the requests with 403. Role `admin` can do everything.
 
 Every command sent to a node (DTMF sequence, service start/stop, configuration
 read/write, schedule read/write), node creation and user changes are recorded
@@ -154,11 +160,13 @@ are stored in clear text.
 
 ### Edit node configuration
 
-The node detail page links to a separate configuration page. Portal
-administrators can read and edit
-`/etc/svxlink/svxlink.conf` and `/etc/svxlink/node_info.json`. The node must be
-online to read or process an edit request. Both files are loaded automatically
-when the configuration page opens. Each save creates a timestamped backup
+The node detail page links to two separate pages: a configuration page for
+`/etc/svxlink/svxlink.conf` (`/nodes/<id>/config`) and a node information page
+for `/etc/svxlink/node_info.json` (`/nodes/<id>/nodeinfo`, with a form editor
+and validation plus a raw JSON view). Portal
+administrators can read and edit both files. The node must be
+online to read or process an edit request. Each file is loaded automatically
+when its page opens. Each save creates a timestamped backup
 beside the original file and preserves its owner and mode. A checksum check
 prevents saving if the file changed after it was loaded; reload it and reapply
 your edits in that case. `node_info.json` must remain valid JSON. Saving does
@@ -254,12 +262,16 @@ portal validates and stores only service state, radio mode/signal, current
 talkgroup, logic, callsign and a bounded snapshot of recent log lines. Reports
 are considered online for 30 seconds.
 `GET /api/nodes`, `GET /api/nodes/<node-id>`, the dashboard and node detail
-pages require portal Basic authentication. Select a node from the dashboard
+pages require a portal login session. Select a node from the dashboard
 to view its latest service, radio, signal, talkgroup, logic, callsign,
-last-seen information and up to 50 recent log lines. The agent tails the log,
-reads `STATE_PTY` and polls the service continuously; it sends a status report
-immediately on changes (and at least every `AGENT_INTERVAL_SECONDS`, default 5).
-The portal stores only the latest report, not a long-term log archive.
+last-seen information and recent log lines. The agent tails the log,
+reads `STATE_PTY` and polls the service continuously. Radio events and new log
+lines are streamed to the portal at all times (`/api/v1/agent/radio` and
+`/api/v1/agent/logs`) and kept in portal memory (last 200 lines per node), so
+node pages load instantly. A full status report is sent every
+`AGENT_INTERVAL_SECONDS` (default 30) and immediately on service, error or
+talkgroup changes. After a portal restart the last full report is used until
+new data arrives. The portal stores no long-term log archive.
 Administrators can remove a node from the dashboard after confirming their
 password. `DELETE /api/nodes/<node-id>` is admin-only and requires the password
 in a JSON body; removal also clears queued agent commands and records an audit
@@ -268,7 +280,7 @@ event.
 ### Live radio stream
 
 While a browser has a node detail page open (`GET /api/nodes/<id>/radio-events`,
-Server-Sent Events, Basic auth), the portal tells the agent to stream radio
+Server-Sent Events, login session), the portal tells the agent to stream radio
 events (`POST /api/v1/agent/radio`: mode, signal level, per-receiver squelch
 and signal, transmitter state). The agent learns this from the `watch` flag in
 its command-poll (default every second, `AGENT_COMMAND_POLL_SECONDS`) and
