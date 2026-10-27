@@ -5,6 +5,34 @@ const sendButton = document.getElementById('dtmf-send');
 const resultList = document.getElementById('bulk-results');
 const status = document.getElementById('bulk-status');
 let sending = false;
+
+const tabs = [...document.querySelectorAll('[role="tab"]')];
+
+function activateTab(tab, focus = false) {
+  for (const candidate of tabs) {
+    const selected = candidate === tab;
+    candidate.setAttribute('aria-selected', String(selected));
+    candidate.tabIndex = selected ? 0 : -1;
+    document.getElementById(candidate.getAttribute('aria-controls')).hidden = !selected;
+  }
+  if (focus) tab.focus();
+}
+
+for (const tab of tabs) {
+  tab.addEventListener('click', () => activateTab(tab));
+  tab.addEventListener('keydown', (event) => {
+    const visible = tabs.filter((candidate) => !candidate.hidden);
+    const index = visible.indexOf(tab);
+    let nextIndex;
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % visible.length;
+    else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + visible.length) % visible.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = visible.length - 1;
+    else return;
+    event.preventDefault();
+    activateTab(visible[nextIndex], true);
+  });
+}
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 function updateSelection() {
