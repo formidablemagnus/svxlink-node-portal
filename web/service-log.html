@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Servicelogg – SvxLink Manager</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <aside class="sidebar" id="sidebar" data-active="node"></aside>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">SERVICELOGG</p>
+        <h1 id="node-name">Hämtar nod…</h1>
+        <p class="muted">Manuell historik över service och underhåll på noden</p>
+      </div>
+      <a id="detail-link" class="button-link" href="#">Tillbaka till noddetaljer</a>
+    </header>
+    <section class="panel">
+      <h2>Ny logganteckning</h2>
+      <form id="service-log-form" class="service-log-form">
+        <label for="service-log-entry">Anteckning</label>
+        <textarea id="service-log-entry" rows="4" maxlength="2000" required
+          placeholder="Beskriv utfört arbete, service eller annan viktig händelse"></textarea>
+        <div class="config-actions">
+          <button id="service-log-submit" type="submit">Lägg till i serviceloggen</button>
+        </div>
+      </form>
+      <p id="service-log-status" class="editor-status muted" role="status" aria-live="polite"></p>
+    </section>
+    <section class="panel">
+      <div class="panel-heading">
+        <div><h2>Logghistorik</h2><p class="muted">Nyaste anteckningarna visas först.</p></div>
+        <span id="service-log-count" class="pill">Läser loggen…</span>
+      </div>
+      <ol id="service-log-entries" class="service-log-entries">
+        <li class="muted">Läser serviceloggen…</li>
+      </ol>
+    </section>
+    <footer>Tidstämpel och användarnamn registreras automatiskt när en anteckning sparas.</footer>
+  </main>
+  <script src="/assets/sidebar.js"></script>
+  <script src="/assets/service-log.js"></script>
+</body>
+</html>

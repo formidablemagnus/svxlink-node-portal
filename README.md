@@ -158,6 +158,13 @@ completed, failed, expired). Configuration contents are never logged, only the
 document name. The log keeps the latest 5000 entries; the DTMF sequences sent
 are stored in clear text.
 
+### Node service log
+
+Every node has a separate **Servicelogg** page linked from its detail page.
+Signed-in administrators and operators can add manual notes; the portal records
+the current UTC timestamp and username automatically. Notes are kept with the
+node and included in portal backups and restores.
+
 ### Edit node configuration
 
 The node detail page links to two separate pages: a configuration page for

@@ -89,6 +89,7 @@ STATIC_ASSETS = {
     "config.js": JS,
     "node-info-form.js": JS,
     "schedules.js": JS,
+    "service-log.js": JS,
     "dtmf.js": JS,
     "admin.js": JS,
     "login.js": JS,
@@ -106,6 +107,7 @@ ADMIN_NODE_PAGES = {
     "nodeinfo": "nodeinfo.html",
     "schedules": "schedules.html",
 }
+NODE_PAGES = {"service-log": "service-log.html"}
 VALID_RADIO_MODES = {"tx", "rx", "idle", "unknown"}
 MAX_RADIO_EVENTS_PER_REQUEST = 100
 MAX_RADIO_VIEWERS_PER_NODE = 20
@@ -242,6 +244,15 @@ def connect_database():
         )"""
     )
     connection.execute(
+        """CREATE TABLE IF NOT EXISTS service_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            node_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            entry TEXT NOT NULL
+        )"""
+    )
+    connection.execute(
         """CREATE TABLE IF NOT EXISTS agent_commands (
             id TEXT PRIMARY KEY,
             node_id TEXT NOT NULL,
@@ -299,6 +310,9 @@ def connect_database():
     )
     connection.execute(
         "CREATE INDEX IF NOT EXISTS audit_log_command ON audit_log (command_id)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS service_log_node ON service_log (node_id, id)"
     )
     connection.execute(
         "CREATE INDEX IF NOT EXISTS agent_commands_node_status "
@@ -780,6 +794,8 @@ BACKUP_TABLES = {
     "audit_log": (("id", True), ("created_at", True), ("actor", True), ("action", True),
                   ("node_id", False), ("node_name", False), ("detail", False),
                   ("outcome", True), ("command_id", False)),
+    "service_log": (("id", True), ("node_id", True), ("created_at", True),
+                    ("actor", True), ("entry", True)),
 }
 
 
@@ -812,6 +828,8 @@ def validate_backup(backup):
     clean = {}
     for table, columns in BACKUP_TABLES.items():
         rows = tables.get(table)
+        if table == "service_log" and table not in tables:
+            rows = []
         if not isinstance(rows, list):
             raise ValueError(f"Säkerhetskopian saknar tabellen {table}.")
         clean_rows = []
@@ -820,7 +838,9 @@ def validate_backup(backup):
                 raise ValueError(f"Ogiltig rad i tabellen {table}.")
             for name, required in columns:
                 value = row[name]
-                numeric = name in ("id", "position") and table in ("audit_log", "dtmf_buttons")
+                numeric = name in ("id", "position") and table in (
+                    "audit_log", "dtmf_buttons", "service_log"
+                )
                 if numeric:
                     valid = isinstance(value, int) and not isinstance(value, bool)
                 else:
@@ -829,6 +849,14 @@ def validate_backup(backup):
                     raise ValueError(f"Ogiltigt värde för {name} i tabellen {table}.")
             clean_rows.append(row)
         clean[table] = clean_rows
+    node_ids = {row["id"] for row in clean["nodes"]}
+    service_log_ids = set()
+    for row in clean["service_log"]:
+        if row["node_id"] not in node_ids:
+            raise ValueError("Säkerhetskopian innehåller en serviceloggrad för en okänd nod.")
+        if row["id"] in service_log_ids or len(row["entry"]) > 2000:
+            raise ValueError("Säkerhetskopian innehåller en ogiltig serviceloggrad.")
+        service_log_ids.add(row["id"])
     for user in clean["portal_users"]:
         if user["role"] not in USER_ROLES or not USERNAME_PATTERN.fullmatch(user["username"]):
             raise ValueError("Säkerhetskopian innehåller en ogiltig användare.")
@@ -999,6 +1027,7 @@ def delete_node(actor, node_id):
         if cursor.rowcount != 1:
             return False
         connection.execute("DELETE FROM agent_commands WHERE node_id = ?", (node_id,))
+        connection.execute("DELETE FROM service_log WHERE node_id = ?", (node_id,))
         record_audit(
             connection, actor, "node.delete", node["name"], node_id, node["name"]
         )
@@ -1507,6 +1536,9 @@ class PortalHandler(BaseHTTPRequestHandler):
                     return
                 node_id = path_parts[0]
                 page = ADMIN_NODE_PAGES[path_parts[1]]
+            elif len(path_parts) == 2 and path_parts[1] in NODE_PAGES:
+                node_id = path_parts[0]
+                page = NODE_PAGES[path_parts[1]]
             else:
                 self.send_json(404, {"error": "Sidan hittades inte."})
                 return
@@ -1550,6 +1582,18 @@ class PortalHandler(BaseHTTPRequestHandler):
                 query = parse_qs(urlparse(self.path).query)
                 node_id = query.get("node_id", [""])[0]
                 self.send_json(200, {"entries": list_audit(node_id=node_id or None)})
+        elif path.startswith("/api/nodes/") and path.endswith("/service-log"):
+            node_id = unquote(path[len("/api/nodes/"):-len("/service-log")])
+            if not node_id or "/" in node_id or node_by_id(node_id) is None:
+                self.send_json(404, {"error": "Noden hittades inte."})
+            else:
+                with database() as connection:
+                    rows = connection.execute(
+                        "SELECT id, created_at, actor, entry FROM service_log "
+                        "WHERE node_id = ? ORDER BY id DESC",
+                        (node_id,),
+                    ).fetchall()
+                self.send_json(200, {"entries": [dict(row) for row in rows]})
         elif path == "/api/backup":
             if not self.require_admin(admin_only=True):
                 return
@@ -1773,6 +1817,48 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": str(exc)})
                 return
             self.send_json(200, {"message": "Säkerhetskopian är återställd.", "restored": counts})
+            return
+        if path.startswith("/api/nodes/") and path.endswith("/service-log"):
+            if not self.require_admin():
+                return
+            node_id = unquote(path[len("/api/nodes/"):-len("/service-log")])
+            if not node_id or "/" in node_id:
+                self.send_json(404, {"error": "Noden hittades inte."})
+                return
+            try:
+                payload = self.read_json_body(MAX_REQUEST_BYTES)
+                if (
+                    not isinstance(payload, dict)
+                    or set(payload) != {"entry"}
+                    or not isinstance(payload["entry"], str)
+                ):
+                    raise ValueError("Begäran måste innehålla serviceloggen som text.")
+                entry = payload["entry"].strip()
+                if not entry or len(entry) > 2000:
+                    raise ValueError("Loggtexten måste innehålla 1–2000 tecken.")
+                with database() as connection:
+                    node = connection.execute(
+                        "SELECT id FROM nodes WHERE id = ?", (node_id,)
+                    ).fetchone()
+                    if node is None:
+                        self.send_json(404, {"error": "Noden hittades inte."})
+                        return
+                    created_at = datetime.now(timezone.utc).isoformat()
+                    cursor = connection.execute(
+                        "INSERT INTO service_log (node_id, created_at, actor, entry) "
+                        "VALUES (?, ?, ?, ?)",
+                        (node_id, created_at, self.actor, entry),
+                    )
+                    log_entry = {
+                        "id": cursor.lastrowid,
+                        "created_at": created_at,
+                        "actor": self.actor,
+                        "entry": entry,
+                    }
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            self.send_json(201, {"entry": log_entry})
             return
         if path == "/api/users":
             if not self.require_admin(admin_only=True):

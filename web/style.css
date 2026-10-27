@@ -157,6 +157,14 @@ button:hover:not(:disabled) { border-color: var(--blue); }
 button:disabled { opacity: .55; cursor: not-allowed; }
 .service-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .config-editor textarea { display: block; width: 100%; min-height: 220px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: #151515; color: var(--text); font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; resize: vertical; }
+.service-log-form { margin-top: 16px; }
+.service-log-form label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.service-log-form textarea { display: block; width: 100%; min-height: 100px; margin-bottom: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: #151515; color: var(--text); font: inherit; resize: vertical; }
+.service-log-entries { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.service-log-entries > li { padding: 14px; border: 1px solid var(--line); border-radius: 7px; overflow-wrap: anywhere; }
+.service-log-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 16px; color: var(--muted); font-size: 12px; }
+.service-log-meta strong { color: var(--text); }
+.service-log-entries p { margin: 10px 0 0; white-space: pre-wrap; }
 .config-editor textarea:disabled { opacity: .7; }
 .config-editor textarea[hidden], .nif[hidden], .nif-errors[hidden] { display: none; }
 .nif-tabs { margin-bottom: 10px; }

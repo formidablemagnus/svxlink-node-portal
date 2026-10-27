@@ -7,6 +7,7 @@ const SERVICE_LABELS = {
 document.getElementById('config-link').href = `/nodes/${encodeURIComponent(nodeId)}/config`;
 document.getElementById('nodeinfo-link').href = `/nodes/${encodeURIComponent(nodeId)}/nodeinfo`;
 document.getElementById('schedules-link').href = `/nodes/${encodeURIComponent(nodeId)}/schedules`;
+document.getElementById('service-log-link').href = `/nodes/${encodeURIComponent(nodeId)}/service-log`;
 const dtmfForm = document.getElementById('dtmf-form');
 const dtmfInput = document.getElementById('dtmf-sequence');
 const dtmfButton = document.getElementById('dtmf-send');

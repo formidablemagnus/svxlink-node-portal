@@ -54,20 +54,113 @@ class PortalBackupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with patch.dict(os.environ, {**env, "PORTAL_DATABASE": str(Path(directory) / "a.sqlite3")}):
                 credentials = provision_node("Node A")
+                with database() as connection:
+                    connection.execute(
+                        "INSERT INTO service_log (node_id, created_at, actor, entry) "
+                        "VALUES (?, ?, ?, ?)",
+                        (credentials["node_id"], "2025-01-02T03:04:05+00:00",
+                         "admin", "Testad service"),
+                    )
                 backup = create_backup("admin")
             with patch.dict(os.environ, {**env, "PORTAL_DATABASE": str(Path(directory) / "b.sqlite3")}):
                 with self.assertRaises(ValueError):
                     restore_backup("admin", {"format": "other"})
                 counts = restore_backup("admin", json.loads(json.dumps(backup)))
                 self.assertEqual(counts["nodes"], 1)
+                self.assertEqual(counts["service_log"], 1)
                 with database() as connection:
                     row = connection.execute("SELECT id, name FROM nodes").fetchone()
                     token_hash = hashlib.sha256(credentials["token"].encode()).hexdigest()
                     found = connection.execute(
                         "SELECT 1 FROM nodes WHERE token_hash = ?", (token_hash,)
                     ).fetchone()
+                    service_entry = connection.execute(
+                        "SELECT node_id, actor, entry FROM service_log"
+                    ).fetchone()
                 self.assertEqual(row["id"], credentials["node_id"])
                 self.assertIsNotNone(found)
+                self.assertEqual(
+                    tuple(service_entry),
+                    (credentials["node_id"], "admin", "Testad service"),
+                )
+                old_backup = json.loads(json.dumps(backup))
+                del old_backup["tables"]["service_log"]
+                restore_backup("admin", old_backup)
+                with database() as connection:
+                    self.assertEqual(
+                        connection.execute("SELECT COUNT(*) FROM service_log").fetchone()[0],
+                        0,
+                    )
+
+
+class PortalServiceLogTests(unittest.TestCase):
+    def test_manual_entries_record_user_and_timestamp(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {
+                "PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3"),
+                "PORTAL_ADMIN_USER": "admin",
+                "PORTAL_ADMIN_PASSWORD": "this-is-a-long-test-password",
+            },
+        ):
+            node = provision_node("Service log node")
+            server = ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f"http://127.0.0.1:{server.server_port}"
+                endpoint = f"/api/nodes/{node['node_id']}/service-log"
+                with self.assertRaises(HTTPError) as unauthorized:
+                    urlopen(f"{base}{endpoint}", timeout=2)
+                self.assertEqual(unauthorized.exception.code, 401)
+
+                admin_cookie = login_cookie(base, "admin", "this-is-a-long-test-password")
+                with urlopen(
+                    Request(f"{base}/nodes/{node['node_id']}/service-log",
+                            headers={"Cookie": admin_cookie}),
+                    timeout=2,
+                ) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertIn("Servicelogg", response.read().decode("utf-8"))
+                self.assertIn("loadEntries", fetch_asset(
+                    base, {"Cookie": admin_cookie}, "service-log.js"
+                ))
+
+                def call(path, body, cookie):
+                    request = Request(
+                        f"{base}{path}",
+                        data=json.dumps(body).encode("utf-8"),
+                        headers={"Cookie": cookie, "Content-Type": "application/json"},
+                    )
+                    with urlopen(request, timeout=2) as response:
+                        return response.status, json.loads(response.read())
+
+                status, admin_entry = call(endpoint, {"entry": "  Service utförd  "}, admin_cookie)
+                self.assertEqual(status, 201)
+                self.assertEqual(admin_entry["entry"]["actor"], "admin")
+                self.assertEqual(admin_entry["entry"]["entry"], "Service utförd")
+                self.assertIsNotNone(datetime.fromisoformat(admin_entry["entry"]["created_at"]))
+
+                with self.assertRaises(HTTPError) as invalid:
+                    call(endpoint, {"entry": "  "}, admin_cookie)
+                self.assertEqual(invalid.exception.code, 400)
+
+                operator_password = "Operator-password-1"
+                call("/api/users", {
+                    "username": "operator", "password": operator_password, "role": "operator",
+                }, admin_cookie)
+                operator_cookie = login_cookie(base, "operator", operator_password)
+                _, operator_entry = call(endpoint, {"entry": "Kontrollerat radion"}, operator_cookie)
+                self.assertEqual(operator_entry["entry"]["actor"], "operator")
+
+                with urlopen(Request(f"{base}{endpoint}", headers={"Cookie": admin_cookie}),
+                             timeout=2) as response:
+                    entries = json.loads(response.read())["entries"]
+                self.assertEqual([entry["actor"] for entry in entries], ["operator", "admin"])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
 
 
 class PortalStatusTests(unittest.TestCase):
