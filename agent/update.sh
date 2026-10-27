@@ -75,6 +75,10 @@ print(tag)
   git -C "$SOURCE_DIR" checkout --detach "$release_tag" >&2
 fi
 
+if [[ ! -f "$SOURCE_DIR/src/CMakeLists.txt" ]]; then
+  fail "SvxLink-källkoden saknar CMakeLists.txt i $SOURCE_DIR/src."
+fi
+
 mkdir -p "$BUILD_DIR"
 log_file="$(mktemp "$WORK_DIR/update.XXXXXX")"
 trap 'rm -f -- "$log_file"' EXIT
@@ -92,7 +96,7 @@ run_logged() {
 
 run_logged "Konfigurerar SvxLink-bygget..." \
   cmake \
-  -S "$SOURCE_DIR" \
+  -S "$SOURCE_DIR/src" \
   -B "$BUILD_DIR" \
   -DUSE_QT=OFF \
   -DCMAKE_INSTALL_PREFIX=/usr \
