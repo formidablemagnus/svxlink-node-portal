@@ -45,19 +45,24 @@ function updateSelection() {
 function renderNodes(nodes) {
   picker.replaceChildren();
   for (const node of nodes) {
+    const available = node.online && node.status?.active === true;
     const label = document.createElement('label');
-    label.className = `node-choice${node.online ? '' : ' node-choice-offline'}`;
+    label.className = `node-choice${available ? '' : ' node-choice-offline'}`;
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
     checkbox.value = node.id;
-    checkbox.disabled = !node.online;
+    checkbox.disabled = !available;
     checkbox.addEventListener('change', updateSelection);
     const name = document.createElement('span');
     name.className = 'node-choice-name';
     name.textContent = node.name;
     const nodeStatus = document.createElement('span');
-    nodeStatus.className = `state ${node.online ? 'online' : 'offline'}`;
-    nodeStatus.textContent = node.online ? 'Online' : 'Offline';
+    nodeStatus.className = `state ${available ? 'online' : 'offline'}`;
+    nodeStatus.textContent = !node.online
+      ? 'Offline'
+      : available
+        ? 'Online · SvxLink igång'
+        : 'SvxLink ej igång';
     label.append(checkbox, name, nodeStatus);
     picker.append(label);
   }

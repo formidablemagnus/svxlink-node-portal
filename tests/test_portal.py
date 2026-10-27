@@ -676,10 +676,23 @@ class PortalDtmfTests(unittest.TestCase):
         ):
             online_node = provision_node("Online node")
             offline_node = provision_node("Offline node")
+            stopped_node = provision_node("Stopped node")
             with database() as connection:
                 connection.execute(
-                    "UPDATE nodes SET last_seen = ? WHERE id = ?",
-                    ("2999-01-01T00:00:00+00:00", online_node["node_id"]),
+                    "UPDATE nodes SET last_seen = ?, status_json = ? WHERE id = ?",
+                    (
+                        "2999-01-01T00:00:00+00:00",
+                        json.dumps({"active": True}),
+                        online_node["node_id"],
+                    ),
+                )
+                connection.execute(
+                    "UPDATE nodes SET last_seen = ?, status_json = ? WHERE id = ?",
+                    (
+                        "2999-01-01T00:00:00+00:00",
+                        json.dumps({"active": False}),
+                        stopped_node["node_id"],
+                    ),
                 )
                 connection.execute(
                     "UPDATE nodes SET last_seen = ? WHERE id = ?",
@@ -714,7 +727,22 @@ class PortalDtmfTests(unittest.TestCase):
                 ) as response:
                     bulk_page = response.read().decode("utf-8")
                 self.assertIn("Välj noder", bulk_page)
-                self.assertIn("/api/dtmf-commands", fetch_asset(base_url, admin_headers, "dtmf.js"))
+                dtmf_script = fetch_asset(base_url, admin_headers, "dtmf.js")
+                self.assertIn("/api/dtmf-commands", dtmf_script)
+                self.assertIn("node.status?.active === true", dtmf_script)
+
+                stopped_request = Request(
+                    f"{base_url}/api/nodes/{stopped_node['node_id']}/dtmf-commands",
+                    data=json.dumps({"sequence": "*123#"}).encode("utf-8"),
+                    headers={**admin_headers, "Content-Type": "application/json"},
+                )
+                with self.assertRaises(HTTPError) as stopped_error:
+                    urlopen(stopped_request, timeout=2)
+                self.assertEqual(stopped_error.exception.code, 409)
+                self.assertIn(
+                    "SvxLink-tjänsten är inte igång",
+                    json.loads(stopped_error.exception.read().decode("utf-8"))["error"],
+                )
 
                 single_request = Request(
                     f"{base_url}/api/nodes/{online_node['node_id']}/dtmf-commands",
@@ -763,6 +791,7 @@ class PortalDtmfTests(unittest.TestCase):
                             "node_ids": [
                                 online_node["node_id"],
                                 offline_node["node_id"],
+                                stopped_node["node_id"],
                                 "f" * 32,
                             ],
                             "sequence": "9#",
@@ -774,14 +803,18 @@ class PortalDtmfTests(unittest.TestCase):
                     bulk_result = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(
                     [result["status"] for result in bulk_result["results"]],
-                    ["pending", "failed", "failed"],
+                    ["pending", "failed", "failed", "failed"],
                 )
                 self.assertEqual(
                     bulk_result["results"][1]["error"],
                     "Noden är offline. Anslut den innan du skickar kommandon.",
                 )
                 self.assertEqual(
-                    bulk_result["results"][2]["error"], "Noden hittades inte."
+                    bulk_result["results"][2]["error"],
+                    "SvxLink-tjänsten är inte igång. Starta tjänsten innan du skickar DTMF.",
+                )
+                self.assertEqual(
+                    bulk_result["results"][3]["error"], "Noden hittades inte."
                 )
                 bulk_command_id = bulk_result["results"][0]["command_id"]
                 with urlopen(

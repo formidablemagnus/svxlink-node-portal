@@ -1135,7 +1135,7 @@ def enqueue_agent_command(node_id, payload, actor="system"):
             ((now - timedelta(seconds=AGENT_COMMAND_TTL_SECONDS)).isoformat(),),
         )
         node = connection.execute(
-            "SELECT id, last_seen FROM nodes WHERE id = ?", (node_id,)
+            "SELECT id, last_seen, status_json FROM nodes WHERE id = ?", (node_id,)
         ).fetchone()
         if node is None:
             return None
@@ -1148,6 +1148,12 @@ def enqueue_agent_command(node_id, payload, actor="system"):
             raise RuntimeError("Nodens senaste kontakttid är ogiltig.") from None
         if (now - last_seen).total_seconds() > ONLINE_WINDOW_SECONDS:
             raise RuntimeError("Noden är offline. Anslut den innan du skickar kommandon.")
+        if command.get("action") == "dtmf":
+            status = json.loads(node["status_json"]) if node["status_json"] else None
+            if not isinstance(status, dict) or status.get("active") is not True:
+                raise RuntimeError(
+                    "SvxLink-tjänsten är inte igång. Starta tjänsten innan du skickar DTMF."
+                )
         count = connection.execute(
             "SELECT COUNT(*) FROM agent_commands "
             "WHERE node_id = ? AND status IN ('pending', 'in_progress')",
