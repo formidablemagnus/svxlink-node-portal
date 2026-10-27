@@ -13,6 +13,7 @@ from agent.version import read_version
 
 MAX_TAIL_BYTES = 256 * 1024
 VERSION_RE = re.compile(r"\d+(?:\.\d+)+[0-9A-Za-z.+~_-]*")
+VERSION_CHECK_SECONDS = 30
 MAX_LINES = 250
 MAX_NODE_INFO_BYTES = 256 * 1024
 MAX_STATE_BUFFER = 65536
@@ -492,8 +493,8 @@ class Collector:
         with self._lock:
             changed = version != self._svxlink_version
             self._svxlink_version = version
-            # Retry soon when unknown, otherwise only pick up upgrades occasionally.
-            self._next_version_check = time.monotonic() + (3600 if version else 60)
+            # Re-read regularly so a finished update shows up in the next reports.
+            self._next_version_check = time.monotonic() + VERSION_CHECK_SECONDS
         if changed:
             self.on_change("svxlink_version")
 
