@@ -13,10 +13,10 @@
   const MENU = [
     {id: 'dashboard', label: 'Dashboard', href: '/'},
     {id: 'dtmf', label: 'DTMF-styrning', href: '/dtmf'},
-    {id: 'admin', label: 'Användare & granskning', href: '/admin', adminOnly: true},
+    {id: 'admin', label: 'Inställningar', href: '/admin', adminOnly: true},
     {heading: 'NODER'},
     {nodes: true},
-    {id: 'settings', label: 'Portalinställningar', href: '/#portal-settings', adminOnly: true},
+    {id: 'settings', label: 'Lägg till nod', href: '/#portal-settings', adminOnly: true},
   ];
   const FOOTER = 'Central nodöversikt';
   const SVG = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
