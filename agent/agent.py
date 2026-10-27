@@ -27,6 +27,7 @@ CONFIG_HELPER = "/usr/local/libexec/svxlink-node-portal-config"
 SYSTEMCTL_BIN = "/usr/bin/systemctl"
 UPDATE_HELPER = "/usr/local/libexec/svxlink-node-portal-update"
 UPDATE_TIMEOUT_SECONDS = 4 * 60 * 60
+UPDATE_PROGRESS_INTERVAL_SECONDS = 20
 
 
 def required_environment(name):
@@ -262,7 +263,7 @@ def execute_service_command(command):
     }
 
 
-def execute_update_command(command):
+def execute_update_command(command, progress_callback=None):
     if (
         not isinstance(command, dict)
         or set(command) != {"id", "action", "channel"}
@@ -273,18 +274,48 @@ def execute_update_command(command):
     ):
         raise ValueError("SvxLink-uppdateringen från portalen har ogiltigt format.")
 
-    try:
-        process = subprocess.run(
-            ["sudo", "-n", UPDATE_HELPER],
-            input=json.dumps({"channel": command["channel"]}).encode("utf-8"),
-            capture_output=True,
-            timeout=UPDATE_TIMEOUT_SECONDS,
-            check=False,
+    progress_stop = threading.Event()
+    progress_thread = None
+
+    def report_progress(stage):
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(stage)
+        except NETWORK_ERRORS as exc:
+            logging.warning("Kunde inte rapportera SvxLink-uppdateringens status: %s", exc)
+
+    if progress_callback is not None:
+        report_progress("starting")
+
+        def report_while_running():
+            while not progress_stop.wait(UPDATE_PROGRESS_INTERVAL_SECONDS):
+                report_progress("working")
+
+        progress_thread = threading.Thread(
+            target=report_while_running,
+            name="update-progress",
+            daemon=True,
         )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "Tidsgränsen överskreds vid SvxLink-uppdateringen."}
-    except OSError as exc:
-        return {"ok": False, "error": f"Kunde inte starta uppdateringsscriptet: {exc}"}
+        progress_thread.start()
+
+    try:
+        try:
+            process = subprocess.run(
+                ["sudo", "-n", UPDATE_HELPER],
+                input=json.dumps({"channel": command["channel"]}).encode("utf-8"),
+                capture_output=True,
+                timeout=UPDATE_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "Tidsgränsen överskreds vid SvxLink-uppdateringen."}
+        except OSError as exc:
+            return {"ok": False, "error": f"Kunde inte starta uppdateringsscriptet: {exc}"}
+    finally:
+        progress_stop.set()
+        if progress_thread is not None:
+            progress_thread.join(timeout=1)
 
     if process.returncode != 0:
         detail = process.stderr.decode("utf-8", errors="replace").strip()
@@ -308,13 +339,13 @@ def execute_update_command(command):
     return result
 
 
-def execute_agent_command(command, config_path):
+def execute_agent_command(command, config_path, update_progress=None):
     if isinstance(command, dict) and command.get("action") == "dtmf":
         return execute_dtmf_command(command, config_path)
     if isinstance(command, dict) and command.get("action") == "service":
         return execute_service_command(command)
     if isinstance(command, dict) and command.get("action") == "update":
-        return execute_update_command(command)
+        return execute_update_command(command, update_progress)
     if isinstance(command, dict) and command.get("action") == "schedules":
         return execute_schedules(command, config_path)
     return execute_config_command(command)
@@ -351,8 +382,16 @@ def process_agent_commands(commands_url, results_url, headers, config_path):
         if not isinstance(command_id, str):
             logging.warning("Portalen skickade en åtgärd utan giltigt ID.")
             continue
+        progress_callback = None
+        if isinstance(command, dict) and command.get("action") == "update":
+            def progress_callback(stage):
+                request_json(
+                    f"{results_url}/{command_id}/progress",
+                    payload={"stage": stage},
+                    headers=headers,
+                )
         try:
-            result = execute_agent_command(command, config_path)
+            result = execute_agent_command(command, config_path, progress_callback)
         except (OSError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
             result = {"ok": False, "error": str(exc)}
         try:

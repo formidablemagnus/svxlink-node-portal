@@ -27,7 +27,7 @@ from portal.version import read_version
 
 ROOT = Path(__file__).resolve().parent.parent
 PORTAL_VERSION = read_version()
-SVXLINK_VERSIONS_URL = "https://raw.githubusercontent.com/sm0svx/svxlink/master/src/versions"
+SVXLINK_VERSIONS_URL = "https://api.github.com/repos/sm0svx/svxlink/releases/latest"
 _latest_svxlink = {"version": "", "next": 0.0, "lock": threading.Lock(), "busy": False}
 
 
@@ -36,9 +36,9 @@ def _fetch_latest_svxlink_version():
     try:
         request = urllib.request.Request(SVXLINK_VERSIONS_URL, headers={"User-Agent": "svxlink-node-portal"})
         with urllib.request.urlopen(request, timeout=10) as response:
-            text = response.read(65536).decode("utf-8", "replace")
-        match = re.search(r"^SVXLINK=(\d+(?:\.\d+)+)\s*$", text, re.MULTILINE)
-        version = match.group(1) if match else ""
+            release = json.loads(response.read(262144).decode("utf-8", "replace"))
+        match = re.fullmatch(r"v?(\d+(?:\.\d+)+)", str(release.get("tag_name", "")))
+        version = match.group(1) if match and not release.get("prerelease") else ""
     except Exception as exc:
         logging.warning("Kunde inte hämta senaste SvxLink-version: %s", exc)
     with _latest_svxlink["lock"]:
@@ -49,7 +49,7 @@ def _fetch_latest_svxlink_version():
 
 
 def latest_svxlink_version():
-    """Return the cached master version; refresh in the background when stale."""
+    """Return the cached latest stable release version; refresh in the background when stale."""
     with _latest_svxlink["lock"]:
         if time.monotonic() >= _latest_svxlink["next"] and not _latest_svxlink["busy"]:
             _latest_svxlink["busy"] = True
@@ -76,6 +76,10 @@ MAX_NODE_INFO_BYTES = 64 * 1024
 AGENT_COMMAND_TTL_SECONDS = 300
 AGENT_UPDATE_TIMEOUT_SECONDS = 4 * 60 * 60
 AGENT_UPDATE_COMMAND_TTL_SECONDS = AGENT_UPDATE_TIMEOUT_SECONDS + 60 * 60
+UPDATE_PROGRESS_MESSAGES = {
+    "starting": "Uppdateringen har startat.",
+    "working": "SvxLink byggs och installeras. Uppdateringen pågår.",
+}
 ONLINE_WINDOW_SECONDS = 30
 MAX_LIVE_LOG_LINES = 200
 MAX_LOG_LINES_PER_REQUEST = 100
@@ -573,7 +577,8 @@ def node_rows():
         rows = connection.execute(
             "SELECT id, name, status_json, last_seen FROM nodes ORDER BY name COLLATE NOCASE"
         ).fetchall()
-    return [node_record(row) for row in rows]
+        updates = active_update_statuses(connection)
+    return [node_record(row, updates.get(row["id"])) for row in rows]
 
 
 def node_by_id(node_id):
@@ -582,10 +587,36 @@ def node_by_id(node_id):
             "SELECT id, name, status_json, last_seen FROM nodes WHERE id = ?",
             (node_id,),
         ).fetchone()
-    return node_record(row) if row else None
+        update = active_update_statuses(connection, {node_id}).get(node_id)
+    return node_record(row, update) if row else None
 
 
-def node_record(row):
+def active_update_statuses(connection, node_ids=None):
+    rows = connection.execute(
+        "SELECT node_id, payload_json, status, result_json FROM agent_commands "
+        "WHERE status IN ('pending', 'in_progress') ORDER BY created_at DESC"
+    ).fetchall()
+    updates = {}
+    for row in rows:
+        if node_ids is not None and row["node_id"] not in node_ids:
+            continue
+        if row["node_id"] in updates:
+            continue
+        try:
+            payload = json.loads(row["payload_json"])
+            progress = json.loads(row["result_json"]) if row["result_json"] else None
+        except (TypeError, json.JSONDecodeError):
+            logging.error("Ogiltig uppdateringsstatus för nod %s.", row["node_id"])
+            continue
+        if isinstance(payload, dict) and payload.get("action") == "update":
+            updates[row["node_id"]] = {
+                "status": row["status"],
+                "progress": progress if isinstance(progress, dict) else None,
+            }
+    return updates
+
+
+def node_record(row, update=None):
     now = datetime.now(timezone.utc)
     last_seen = row["last_seen"]
     online = False
@@ -604,6 +635,7 @@ def node_record(row):
         "online": online,
         "last_seen": last_seen,
         "status": status,
+        "update": update,
     }
 
 
@@ -1201,6 +1233,7 @@ def enqueue_agent_command(node_id, payload, actor="system"):
     now = datetime.now(timezone.utc)
     created_at = now.isoformat()
     with database() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         cleanup_agent_commands(connection, now)
         node = connection.execute(
             "SELECT id, last_seen, status_json FROM nodes WHERE id = ?", (node_id,)
@@ -1216,6 +1249,25 @@ def enqueue_agent_command(node_id, payload, actor="system"):
             raise RuntimeError("Nodens senaste kontakttid är ogiltig.") from None
         if (now - last_seen).total_seconds() > ONLINE_WINDOW_SECONDS:
             raise RuntimeError("Noden är offline. Anslut den innan du skickar kommandon.")
+        active_commands = connection.execute(
+            "SELECT payload_json FROM agent_commands "
+            "WHERE node_id = ? AND status IN ('pending', 'in_progress')",
+            (node_id,),
+        ).fetchall()
+        active_actions = []
+        for row in active_commands:
+            try:
+                active_payload = json.loads(row["payload_json"])
+            except json.JSONDecodeError:
+                logging.error("Ogiltigt kommando i kön för nod %s.", node_id)
+                raise RuntimeError("Nodens åtgärdskö innehåller ett ogiltigt kommando.") from None
+            active_actions.append(
+                active_payload.get("action") if isinstance(active_payload, dict) else None
+            )
+        if "update" in active_actions:
+            raise RuntimeError("Noden uppdateras. Vänta tills uppdateringen är klar.")
+        if command.get("action") == "update" and active_actions:
+            raise RuntimeError("Noden har andra väntande åtgärder. Vänta tills de är klara.")
         if command.get("action") == "dtmf":
             status = json.loads(node["status_json"]) if node["status_json"] else None
             if not isinstance(status, dict) or status.get("active") is not True:
@@ -1392,6 +1444,39 @@ def complete_agent_command(node_id, command_id, result):
     return cursor.rowcount == 1
 
 
+def report_agent_command_progress(node_id, command_id, progress):
+    if (
+        not isinstance(progress, dict)
+        or set(progress) != {"stage"}
+        or not isinstance(progress["stage"], str)
+        or progress["stage"] not in UPDATE_PROGRESS_MESSAGES
+    ):
+        raise ValueError("Uppdateringsstatusen har ogiltigt format.")
+    now = datetime.now(timezone.utc).isoformat()
+    progress_json = json.dumps({
+        "stage": progress["stage"],
+        "message": UPDATE_PROGRESS_MESSAGES[progress["stage"]],
+        "updated_at": now,
+    }, ensure_ascii=False)
+    with database() as connection:
+        row = connection.execute(
+            "SELECT payload_json FROM agent_commands "
+            "WHERE id = ? AND node_id = ? AND status = 'in_progress'",
+            (command_id, node_id),
+        ).fetchone()
+        if row is None:
+            return False
+        command = json.loads(row["payload_json"])
+        if not isinstance(command, dict) or command.get("action") != "update":
+            return False
+        cursor = connection.execute(
+            "UPDATE agent_commands SET result_json = ?, updated_at = ? "
+            "WHERE id = ? AND node_id = ? AND status = 'in_progress'",
+            (progress_json, now, command_id, node_id),
+        )
+    return cursor.rowcount == 1
+
+
 def take_agent_command_result(command_id):
     now = datetime.now(timezone.utc)
     with database() as connection:
@@ -1406,6 +1491,8 @@ def take_agent_command_result(command_id):
             result = json.loads(row["result_json"])
             connection.execute("DELETE FROM agent_commands WHERE id = ?", (command_id,))
             return {"status": row["status"], "result": result}
+        if row["status"] == "in_progress" and row["result_json"]:
+            return {"status": row["status"], "progress": json.loads(row["result_json"])}
         created_at = datetime.fromisoformat(row["created_at"])
         payload = json.loads(row["payload_json"])
         ttl = agent_command_ttl(payload)
@@ -2121,6 +2208,25 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.send_json(404, {"error": "Noden hittades inte."})
             else:
                 self.send_json(202, {"command_id": command_id, "status": "pending"})
+            return
+
+        if path.startswith("/api/v1/agent/commands/") and path.endswith("/progress"):
+            node_id = self.authenticated_agent_id()
+            if node_id is None:
+                self.send_json(401, {"error": "Ogiltig nodautentisering."})
+                return
+            command_id = path[len("/api/v1/agent/commands/"):-len("/progress")].rstrip("/")
+            try:
+                progress = self.read_json_body(MAX_REQUEST_BYTES)
+                updated = report_agent_command_progress(node_id, command_id, progress)
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            if not updated:
+                self.send_json(404, {"error": "SvxLink-uppdateringen hittades inte."})
+            else:
+                touch_node(node_id)
+                self.send_json(200, {"ok": True})
             return
 
         if path.startswith("/api/v1/agent/commands/") and path.endswith("/result"):

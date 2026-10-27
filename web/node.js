@@ -22,6 +22,7 @@ const updateStartButton = document.getElementById('update-start');
 const updateChannel = document.getElementById('update-channel');
 const updateCommandStatus = document.getElementById('update-command-status');
 let updateRunning = false;
+let nodeUpdate = null;
 let nodeOnline = false;
 let serviceActive = null;
 let serviceStatusExpected = null;
@@ -29,12 +30,13 @@ const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, mill
 
 function updateServiceControls() {
   const waitingForStatus = serviceStatusExpected !== null;
-  const serviceDisabled = !nodeOnline || serviceCommandRunning || updateRunning || waitingForStatus;
+  const updateActive = nodeUpdate?.status === 'pending' || nodeUpdate?.status === 'in_progress';
+  const serviceDisabled = !nodeOnline || serviceCommandRunning || updateRunning || updateActive || waitingForStatus;
   serviceStartButton.disabled = serviceDisabled || serviceActive !== false;
   serviceStopButton.disabled = serviceDisabled || serviceActive !== true;
   serviceRestartButton.disabled = serviceStopButton.disabled;
-  updateChannel.disabled = updateRunning;
-  updateStartButton.disabled = !nodeOnline || serviceCommandRunning || updateRunning;
+  updateChannel.disabled = updateRunning || updateActive;
+  updateStartButton.disabled = !nodeOnline || serviceCommandRunning || updateRunning || updateActive;
 }
 
 function renderRadio(radio) {
@@ -214,6 +216,7 @@ function renderNodeInfo(info) {
 function renderNode(node) {
   const status = node.status || {};
   const radio = status.radio || {};
+  nodeUpdate = node.update;
   const lastSeen = node.last_seen ? new Date(node.last_seen).toLocaleString('sv-SE') : 'Aldrig';
   setText('node-name', node.name);
   setText('node-callsign', status.callsign || 'Lokal SvxLink-status från nodagenten');
@@ -245,23 +248,33 @@ function renderNode(node) {
   serviceActive = typeof status.active === 'boolean' ? status.active : null;
   if (serviceActive === serviceStatusExpected) serviceStatusExpected = null;
   updateServiceControls();
+  if (nodeUpdate) {
+    updateCommandStatus.textContent = nodeUpdate.progress?.message
+      || (nodeUpdate.status === 'pending'
+        ? 'Uppdateringen väntar på nodagenten…'
+        : 'SvxLink-uppdateringen pågår…');
+  }
   allLogs = Array.isArray(status.logs) ? status.logs : [];
   renderNodeInfo(status.node_info);
   renderLogs();
-  dtmfButton.disabled = !node.online || dtmfSending;
-  setPresetsDisabled(!node.online || dtmfSending);
+  dtmfInput.disabled = Boolean(nodeUpdate);
+  dtmfButton.disabled = !node.online || dtmfSending || Boolean(nodeUpdate);
+  setPresetsDisabled(!node.online || dtmfSending || Boolean(nodeUpdate));
   document.getElementById('error').textContent = node.online
     ? ''
     : 'Noden är offline. Visade statusvärden kommer från den senaste rapporten.';
   document.getElementById('updated').textContent = `Uppdaterad ${new Date().toLocaleTimeString('sv-SE')}`;
 }
 
-async function waitForCommand(commandId, successMessage, failureMessage, maxAttempts = 60, pollInterval = 1000) {
+async function waitForCommand(commandId, successMessage, failureMessage, maxAttempts = 60, pollInterval = 1000, onProgress = null) {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     await wait(pollInterval);
     const response = await fetch(`/api/commands/${encodeURIComponent(commandId)}`, {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const result = await response.json();
+    if (result.status === 'in_progress' && result.progress?.message && onProgress) {
+      onProgress(result.progress);
+    }
     if (result.status === 'completed') {
       return typeof successMessage === 'function' ? successMessage(result.result) : successMessage;
     }
@@ -344,7 +357,8 @@ async function updateSvxLink() {
       (result) => `SvxLink ${result.version} installerades via ${labels[result.channel]}.`,
       'Uppdateringen misslyckades.',
       5400,
-      3000
+      3000,
+      (progress) => { updateCommandStatus.textContent = progress.message; }
     );
     updateCommandStatus.textContent = message;
   } catch (error) {

@@ -2,6 +2,7 @@ import json
 import os
 import stat
 import tempfile
+import threading
 import unittest
 from urllib.error import URLError
 from pathlib import Path
@@ -179,6 +180,28 @@ class AgentStatusTests(unittest.TestCase):
             json.loads(run_update.call_args.kwargs["input"].decode()),
             {"channel": "release"},
         )
+
+    def test_update_command_reports_start_and_periodic_progress(self):
+        command = {"id": "a" * 32, "action": "update", "channel": "release"}
+        expected = {"ok": True, "channel": "release", "version": "26.05.2"}
+        stages = []
+
+        def finish_after_heartbeat(*args, **kwargs):
+            threading.Event().wait(0.05)
+            return SimpleNamespace(
+                returncode=0,
+                stdout=(json.dumps(expected) + "\n").encode(),
+                stderr=b"",
+            )
+
+        with patch("agent.agent.UPDATE_PROGRESS_INTERVAL_SECONDS", 0.01), patch(
+            "agent.agent.subprocess.run", side_effect=finish_after_heartbeat
+        ):
+            result = execute_update_command(command, stages.append)
+
+        self.assertEqual(result, expected)
+        self.assertEqual(stages[0], "starting")
+        self.assertIn("working", stages)
 
     def test_update_command_rejects_untrusted_channel_before_running(self):
         command = {

@@ -52,6 +52,8 @@ header { margin-bottom: 27px; }
 .node-settings { color: var(--muted); }
 .delete-node { padding: 0; background: transparent; color: var(--red); }
 .version-warning { color: #d4a000; text-decoration: none; font-size: 16px; }
+.prerelease-marker { color: #888; display: inline-flex; vertical-align: middle; }
+.update-spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--blue); border-top-color: transparent; border-radius: 50%; vertical-align: -1px; animation: status-spin .8s linear infinite; }
 .node-settings:hover { border-color: var(--blue); color: var(--blue); }
 .node-settings svg, .delete-node svg { width: 19px; height: 19px; }
 .delete-node:hover:not(:disabled) { border-color: var(--red); }
@@ -97,7 +99,7 @@ td .state::before { width: 12px; height: 12px; }
 .status-dot.unknown { background: #f5c518; }
 .status-dot.loading { background: transparent; border: 2px solid var(--muted); border-top-color: transparent; box-sizing: border-box; animation: status-spin .8s linear infinite; }
 @keyframes status-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .status-dot.loading { animation-duration: 2.4s; } }
+@media (prefers-reduced-motion: reduce) { .status-dot.loading, .update-spinner { animation-duration: 2.4s; } }
 .status-dot.radio-tx { background: #e5484d; }
 .status-dot.radio-rx { background: #f5c518; }
 .status-dot.radio-idle { background: var(--green); }

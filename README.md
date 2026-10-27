@@ -136,8 +136,11 @@ or **Senaste stabila release** and start an update. Pre-release builds use the
 latest `master` commit; stable builds use the latest non-prerelease GitHub
 release. Both build a Debian package and restart `svxlink.service` after
 installation. The command and its result are recorded in the portal audit log.
-Builds can take several hours, so keep the node online and allow the command to
-finish.
+The agent reports when the update starts and sends a progress heartbeat every
+20 seconds. The node page shows the current status, disables node controls while
+the update runs, and the dashboard displays a spinner beside the SvxLink
+version. Builds can take several hours, so keep the node online and allow the
+command to finish.
 
 The installer creates a separate, non-login `svxlink-node-updater` account.
 It keeps its source checkout and CMake build directory in

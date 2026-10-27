@@ -835,6 +835,71 @@ class PortalUpdateCommandTests(unittest.TestCase):
                         "channel": "release",
                     }],
                 )
+                agent_headers = {
+                    "Authorization": "Bearer " + node["token"],
+                    "Content-Type": "application/json",
+                }
+                with urlopen(
+                    Request(
+                        f"{base_url}/api/v1/agent/commands/{command_id}/progress",
+                        data=json.dumps({"stage": "starting"}).encode(),
+                        headers=agent_headers,
+                    ),
+                    timeout=2,
+                ) as response:
+                    self.assertEqual(response.status, 200)
+                progress = take_agent_command_result(command_id)
+                self.assertEqual(progress["status"], "in_progress")
+                self.assertEqual(progress["progress"]["stage"], "starting")
+                self.assertEqual(
+                    progress["progress"]["message"],
+                    "Uppdateringen har startat.",
+                )
+                with urlopen(
+                    Request(
+                        f"{base_url}/api/nodes/{node['node_id']}",
+                        headers={**session_header(base_url, admin_credentials)},
+                    ),
+                    timeout=2,
+                ) as response:
+                    node_status = json.loads(response.read())["node"]
+                self.assertEqual(node_status["update"]["status"], "in_progress")
+                self.assertEqual(
+                    node_status["update"]["progress"]["stage"],
+                    "starting",
+                )
+                with urlopen(
+                    Request(
+                        f"{base_url}/api/nodes",
+                        headers={**session_header(base_url, admin_credentials)},
+                    ),
+                    timeout=2,
+                ) as response:
+                    dashboard = json.loads(response.read())["nodes"]
+                self.assertEqual(dashboard[0]["update"]["status"], "in_progress")
+                dashboard_script = fetch_asset(
+                    base_url,
+                    session_header(base_url, admin_credentials),
+                    "index.js",
+                )
+                self.assertIn("update-spinner", dashboard_script)
+                node_script = fetch_asset(
+                    base_url,
+                    session_header(base_url, admin_credentials),
+                    "node.js",
+                )
+                self.assertIn("nodeUpdate?.status", node_script)
+                with self.assertRaises(HTTPError) as duplicate_update:
+                    urlopen(
+                        Request(
+                            endpoint,
+                            data=json.dumps({"channel": "release"}).encode(),
+                            headers=admin_headers,
+                        ),
+                        timeout=2,
+                    )
+                self.assertEqual(duplicate_update.exception.code, 409)
+
                 old = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
                 with database() as connection:
                     connection.execute(
@@ -842,12 +907,16 @@ class PortalUpdateCommandTests(unittest.TestCase):
                         (old, old, command_id),
                     )
                 self.assertEqual(claim_agent_commands(node["node_id"]), [])
-                self.assertEqual(take_agent_command_result(command_id), {"status": "in_progress"})
-                service_id = enqueue_agent_command(
-                    node["node_id"],
-                    {"action": "service", "operation": "restart"},
-                    "admin",
+                self.assertEqual(
+                    take_agent_command_result(command_id)["status"],
+                    "in_progress",
                 )
+                with self.assertRaisesRegex(RuntimeError, "Noden uppdateras"):
+                    enqueue_agent_command(
+                        node["node_id"],
+                        {"action": "service", "operation": "restart"},
+                        "admin",
+                    )
                 self.assertEqual(claim_agent_commands(node["node_id"]), [])
                 self.assertTrue(complete_agent_command(
                     node["node_id"],
@@ -860,6 +929,11 @@ class PortalUpdateCommandTests(unittest.TestCase):
                         "status": "completed",
                         "result": {"ok": True, "channel": "release", "version": "26.05.2"},
                     },
+                )
+                service_id = enqueue_agent_command(
+                    node["node_id"],
+                    {"action": "service", "operation": "restart"},
+                    "admin",
                 )
                 self.assertEqual(
                     claim_agent_commands(node["node_id"]),
