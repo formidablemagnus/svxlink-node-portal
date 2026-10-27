@@ -74,6 +74,8 @@ PASSWORD_ITERATIONS = 200_000
 MAX_SCHEDULES = 100
 MAX_NODE_INFO_BYTES = 64 * 1024
 AGENT_COMMAND_TTL_SECONDS = 300
+AGENT_UPDATE_TIMEOUT_SECONDS = 4 * 60 * 60
+AGENT_UPDATE_COMMAND_TTL_SECONDS = AGENT_UPDATE_TIMEOUT_SECONDS + 60 * 60
 ONLINE_WINDOW_SECONDS = 30
 MAX_LIVE_LOG_LINES = 200
 MAX_LOG_LINES_PER_REQUEST = 100
@@ -225,6 +227,40 @@ def database_path():
     return Path(os.environ.get("PORTAL_DATABASE", "/var/lib/svxlink-node-portal/portal.sqlite3"))
 
 
+def agent_command_ttl(payload):
+    if isinstance(payload, dict) and payload.get("action") == "update":
+        return AGENT_UPDATE_COMMAND_TTL_SECONDS
+    return AGENT_COMMAND_TTL_SECONDS
+
+
+def cleanup_agent_commands(connection, now):
+    candidates = connection.execute(
+        "SELECT id, payload_json, created_at, status FROM agent_commands WHERE created_at < ?",
+        ((now - timedelta(seconds=AGENT_COMMAND_TTL_SECONDS)).isoformat(),),
+    ).fetchall()
+    for row in candidates:
+        try:
+            payload = json.loads(row["payload_json"])
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        ttl = agent_command_ttl(payload)
+        age = now - datetime.fromisoformat(row["created_at"])
+        if age > timedelta(seconds=ttl):
+            if row["status"] != "expired":
+                expired_payload = (
+                    json.dumps({"action": "update"})
+                    if isinstance(payload, dict) and payload.get("action") == "update"
+                    else "{}"
+                )
+                connection.execute(
+                    "UPDATE agent_commands SET status = 'expired', payload_json = ?, "
+                    "result_json = NULL, updated_at = ? WHERE id = ?",
+                    (expired_payload, now.isoformat(), row["id"]),
+                )
+            if age > timedelta(seconds=ttl + 60):
+                connection.execute("DELETE FROM agent_commands WHERE id = ?", (row["id"],))
+
+
 def connect_database():
     global _last_command_cleanup
     path = database_path()
@@ -324,20 +360,7 @@ def connect_database():
         last_cleanup = _last_command_cleanup.get(cleanup_key, 0)
         if current_time - last_cleanup >= COMMAND_CLEANUP_INTERVAL_SECONDS:
             now = datetime.now(timezone.utc)
-            expired_before = (now - timedelta(seconds=AGENT_COMMAND_TTL_SECONDS)).isoformat()
-            delete_before = (
-                now - timedelta(seconds=AGENT_COMMAND_TTL_SECONDS + 60)
-            ).isoformat()
-            connection.execute(
-                "UPDATE agent_commands SET status = 'expired', payload_json = '{}', "
-                "result_json = NULL, updated_at = ? "
-                "WHERE created_at < ? AND status != 'expired'",
-                (now.isoformat(), expired_before),
-            )
-            connection.execute(
-                "DELETE FROM agent_commands WHERE created_at < ?",
-                (delete_before,),
-            )
+            cleanup_agent_commands(connection, now)
             _last_command_cleanup[cleanup_key] = current_time
     connection.commit()
     return connection
@@ -661,6 +684,17 @@ def validate_service_command(payload):
     return {"action": "service", "operation": payload["operation"]}
 
 
+def validate_update_command(payload):
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"action", "channel"}
+        or payload["action"] != "update"
+        or payload["channel"] not in ("prerelease", "release")
+    ):
+        raise ValueError("Ogiltig SvxLink-uppdatering.")
+    return {"action": "update", "channel": payload["channel"]}
+
+
 def validate_dtmf_buttons(payload):
     if (
         not isinstance(payload, dict)
@@ -723,6 +757,8 @@ def validate_agent_command(payload):
         return validate_dtmf_command(payload)
     if isinstance(payload, dict) and payload.get("action") == "service":
         return validate_service_command(payload)
+    if isinstance(payload, dict) and payload.get("action") == "update":
+        return validate_update_command(payload)
     if isinstance(payload, dict) and payload.get("action") == "schedules":
         return validate_schedules_command(payload)
     return validate_config_command(payload)
@@ -738,6 +774,8 @@ def command_audit_summary(command):
         return "dtmf", command["sequence"]
     if action == "service":
         return "service", command["operation"]
+    if action == "update":
+        return "update", command["channel"]
     if action == "schedules":
         return "schedules", command["operation"]
     return f"config.{action}", command["document"]
@@ -759,9 +797,6 @@ def record_audit(connection, actor, action, detail="", node_id=None, node_name=N
 
 
 def list_audit(limit=AUDIT_PAGE_SIZE, node_id=None):
-    expired_before = (
-        datetime.now(timezone.utc) - timedelta(seconds=AGENT_COMMAND_TTL_SECONDS + 60)
-    ).isoformat()
     query = (
         "SELECT created_at, actor, action, node_id, node_name, detail, outcome "
         "FROM audit_log"
@@ -775,10 +810,17 @@ def list_audit(limit=AUDIT_PAGE_SIZE, node_id=None):
     with database() as connection:
         rows = connection.execute(query, params).fetchall()
     entries = []
+    now = datetime.now(timezone.utc)
     for row in rows:
         entry = dict(row)
-        if entry["outcome"] == "queued" and entry["created_at"] < expired_before:
-            entry["outcome"] = "expired"
+        if entry["outcome"] == "queued":
+            ttl = (
+                AGENT_UPDATE_COMMAND_TTL_SECONDS
+                if entry["action"] == "update"
+                else AGENT_COMMAND_TTL_SECONDS
+            )
+            if now - datetime.fromisoformat(entry["created_at"]) > timedelta(seconds=ttl + 60):
+                entry["outcome"] = "expired"
         entries.append(entry)
     return entries
 
@@ -1159,10 +1201,7 @@ def enqueue_agent_command(node_id, payload, actor="system"):
     now = datetime.now(timezone.utc)
     created_at = now.isoformat()
     with database() as connection:
-        connection.execute(
-            "DELETE FROM agent_commands WHERE created_at < ?",
-            ((now - timedelta(seconds=AGENT_COMMAND_TTL_SECONDS)).isoformat(),),
-        )
+        cleanup_agent_commands(connection, now)
         node = connection.execute(
             "SELECT id, last_seen, status_json FROM nodes WHERE id = ?", (node_id,)
         ).fetchone()
@@ -1209,14 +1248,9 @@ def enqueue_agent_command(node_id, payload, actor="system"):
 def claim_agent_commands(node_id):
     now = datetime.now(timezone.utc)
     now_text = now.isoformat()
-    expired_before = (now - timedelta(seconds=AGENT_COMMAND_TTL_SECONDS)).isoformat()
     retry_before = (now - timedelta(seconds=45)).isoformat()
     with database() as connection:
-        connection.execute(
-            "UPDATE agent_commands SET status = 'expired', updated_at = ? "
-            "WHERE node_id = ? AND created_at < ? AND status IN ('pending', 'in_progress')",
-            (now_text, node_id, expired_before),
-        )
+        cleanup_agent_commands(connection, now)
         stale_commands = connection.execute(
             "SELECT id, payload_json FROM agent_commands "
             "WHERE node_id = ? AND status = 'in_progress' AND updated_at < ?",
@@ -1224,12 +1258,24 @@ def claim_agent_commands(node_id):
         ).fetchall()
         for row in stale_commands:
             payload = json.loads(row["payload_json"])
+            if payload.get("action") == "update":
+                continue
             status = "expired" if payload.get("action") == "dtmf" else "pending"
             connection.execute(
                 "UPDATE agent_commands SET status = ?, updated_at = ? "
                 "WHERE id = ? AND status = 'in_progress'",
                 (status, now_text, row["id"]),
             )
+        active_updates = connection.execute(
+            "SELECT payload_json FROM agent_commands "
+            "WHERE node_id = ? AND status = 'in_progress'",
+            (node_id,),
+        ).fetchall()
+        if any(
+            json.loads(row["payload_json"]).get("action") == "update"
+            for row in active_updates
+        ):
+            return []
         rows = connection.execute(
             "SELECT id, payload_json FROM agent_commands "
             "WHERE node_id = ? AND status = 'pending' ORDER BY created_at LIMIT 1",
@@ -1298,6 +1344,14 @@ def complete_agent_command(node_id, command_id, result):
     elif command["action"] == "service":
         if set(result) != {"ok"}:
             raise ValueError("Tjänstresultatet har ogiltigt format.")
+    elif command["action"] == "update":
+        if (
+            set(result) != {"ok", "channel", "version"}
+            or result["channel"] != command["channel"]
+            or not isinstance(result["version"], str)
+            or not re.fullmatch(r"[A-Za-z0-9.+:~_-]{1,128}", result["version"])
+        ):
+            raise ValueError("Uppdateringsresultatet har ogiltigt format.")
     elif command["action"] == "schedules":
         if set(result) != {"ok", "schedules", "other_lines", "cron_target", "sha256"} or not (
             isinstance(result["schedules"], list)
@@ -1342,7 +1396,8 @@ def take_agent_command_result(command_id):
     now = datetime.now(timezone.utc)
     with database() as connection:
         row = connection.execute(
-            "SELECT status, result_json, created_at FROM agent_commands WHERE id = ?",
+            "SELECT status, result_json, created_at, payload_json "
+            "FROM agent_commands WHERE id = ?",
             (command_id,),
         ).fetchone()
         if row is None:
@@ -1352,7 +1407,9 @@ def take_agent_command_result(command_id):
             connection.execute("DELETE FROM agent_commands WHERE id = ?", (command_id,))
             return {"status": row["status"], "result": result}
         created_at = datetime.fromisoformat(row["created_at"])
-        if (now - created_at).total_seconds() > AGENT_COMMAND_TTL_SECONDS:
+        payload = json.loads(row["payload_json"])
+        ttl = agent_command_ttl(payload)
+        if (now - created_at).total_seconds() > ttl:
             connection.execute("DELETE FROM agent_commands WHERE id = ?", (command_id,))
             return {"status": "expired"}
         return {"status": row["status"]}
@@ -1985,6 +2042,30 @@ class PortalHandler(BaseHTTPRequestHandler):
                     raise ValueError("DTMF-begäran måste innehålla en sekvens.")
                 command = validate_dtmf_command(
                     {"action": "dtmf", "sequence": payload["sequence"]}
+                )
+                command_id = enqueue_agent_command(node_id, command, self.actor)
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            except RuntimeError as exc:
+                self.send_json(409, {"error": str(exc)})
+                return
+            if command_id is None:
+                self.send_json(404, {"error": "Noden hittades inte."})
+            else:
+                self.send_json(202, {"command_id": command_id, "status": "pending"})
+            return
+
+        if path.startswith("/api/nodes/") and path.endswith("/update-commands"):
+            if not self.require_admin(admin_only=True):
+                return
+            node_id = path[len("/api/nodes/"):-len("/update-commands")].rstrip("/")
+            try:
+                payload = self.read_json_body(MAX_REQUEST_BYTES)
+                if not isinstance(payload, dict) or set(payload) != {"channel"}:
+                    raise ValueError("Uppdateringsbegäran måste innehålla en kanal.")
+                command = validate_update_command(
+                    {"action": "update", "channel": payload["channel"]}
                 )
                 command_id = enqueue_agent_command(node_id, command, self.actor)
             except (ValueError, UnicodeError, json.JSONDecodeError) as exc:

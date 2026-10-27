@@ -119,6 +119,52 @@ install_agent_config_helper() {
   mv "$sudoers_tmp" "$sudoers"
 }
 
+install_agent_update_helpers() {
+  local builder_source="$SCRIPT_DIR/agent/update.sh"
+  local helper_source="$SCRIPT_DIR/agent/update_helper.py"
+  local builder="/usr/local/libexec/svxlink-node-portal-build-update"
+  local helper="/usr/local/libexec/svxlink-node-portal-update"
+  local sudoers="/etc/sudoers.d/svxlink-node-portal-agent"
+  local source
+  for source in "$builder_source" "$helper_source"; do
+    if [[ ! -f "$source" ]]; then
+      say_error "Uppdateringshjälpen saknas: $source"
+      exit 1
+    fi
+  done
+  for executable in /usr/bin/dpkg /usr/bin/dpkg-deb /usr/bin/git /usr/bin/systemctl /usr/bin/systemd-run /usr/sbin/runuser; do
+    if [[ ! -x "$executable" ]]; then
+      say_error "Nödvändigt program saknas: $executable"
+      exit 1
+    fi
+  done
+  if ! id svxlink-node-updater >/dev/null 2>&1; then
+    useradd --system --user-group --home-dir /var/lib/svxlink-node-updater \
+      --create-home --shell /usr/sbin/nologin svxlink-node-updater
+  elif ! getent group svxlink-node-updater >/dev/null 2>&1; then
+    say_error "Användaren svxlink-node-updater saknar en grupp med samma namn."
+    exit 1
+  fi
+  install -d -o root -g root -m 0755 /usr/local/libexec
+  install -o root -g root -m 0755 "$builder_source" "$builder"
+  install -o root -g root -m 0755 "$helper_source" "$helper"
+  install -d -o svxlink-node-updater -g svxlink-node-updater -m 0750 \
+    /var/lib/svxlink-node-updater
+
+  local sudoers_tmp
+  sudoers_tmp="$(mktemp /etc/sudoers.d/svxlink-node-portal-agent.XXXXXX)"
+  printf '%s\n' \
+    'svxlink ALL=(root) NOPASSWD: /usr/local/libexec/svxlink-node-portal-config, /usr/local/libexec/svxlink-node-portal-update "", /usr/bin/systemctl start svxlink.service, /usr/bin/systemctl stop svxlink.service, /usr/bin/systemctl restart svxlink.service, /usr/bin/crontab -u svxlink -l, /usr/bin/crontab -u svxlink -, /usr/bin/crontab -u svxlink -r' \
+    > "$sudoers_tmp"
+  chmod 0440 "$sudoers_tmp"
+  if ! visudo -cf "$sudoers_tmp"; then
+    rm -f "$sudoers_tmp"
+    say_error "Sudoers-regeln för uppdateringshjälpen är ogiltig."
+    exit 1
+  fi
+  mv "$sudoers_tmp" "$sudoers"
+}
+
 create_portal_environment() {
   if [[ -e "$PORTAL_ENV" ]]; then
     printf 'Behåller befintlig konfiguration: %s\n' "$PORTAL_ENV"
@@ -296,6 +342,7 @@ case "$ROLE" in
   agent)
     install_component agent
     install_agent_config_helper
+    install_agent_update_helpers
     create_agent_environment
     install_service svxlink-node-agent.service
     ;;
@@ -312,6 +359,7 @@ case "$ROLE" in
     install_component web
     install_component agent
     install_agent_config_helper
+    install_agent_update_helpers
     create_portal_environment
     create_agent_environment
     install_service svxlink-node-portal.service

@@ -25,6 +25,8 @@ MAX_CONFIG_BYTES = 2 * 1024 * 1024
 CONFIG_DOCUMENTS = {"svxlink.conf", "node_info.json"}
 CONFIG_HELPER = "/usr/local/libexec/svxlink-node-portal-config"
 SYSTEMCTL_BIN = "/usr/bin/systemctl"
+UPDATE_HELPER = "/usr/local/libexec/svxlink-node-portal-update"
+UPDATE_TIMEOUT_SECONDS = 4 * 60 * 60
 
 
 def required_environment(name):
@@ -260,11 +262,59 @@ def execute_service_command(command):
     }
 
 
+def execute_update_command(command):
+    if (
+        not isinstance(command, dict)
+        or set(command) != {"id", "action", "channel"}
+        or not isinstance(command["id"], str)
+        or not re.fullmatch(r"[0-9a-f]{32}", command["id"])
+        or command["action"] != "update"
+        or command["channel"] not in ("prerelease", "release")
+    ):
+        raise ValueError("SvxLink-uppdateringen från portalen har ogiltigt format.")
+
+    try:
+        process = subprocess.run(
+            ["sudo", "-n", UPDATE_HELPER],
+            input=json.dumps({"channel": command["channel"]}).encode("utf-8"),
+            capture_output=True,
+            timeout=UPDATE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "Tidsgränsen överskreds vid SvxLink-uppdateringen."}
+    except OSError as exc:
+        return {"ok": False, "error": f"Kunde inte starta uppdateringsscriptet: {exc}"}
+
+    if process.returncode != 0:
+        detail = process.stderr.decode("utf-8", errors="replace").strip()
+        return {
+            "ok": False,
+            "error": (detail or "SvxLink-uppdateringen misslyckades.")[-1024:],
+        }
+    try:
+        result = json.loads(process.stdout.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        return {"ok": False, "error": f"Uppdateringsscriptet returnerade ett ogiltigt svar: {exc}"}
+    if (
+        not isinstance(result, dict)
+        or set(result) != {"ok", "channel", "version"}
+        or result["ok"] is not True
+        or result["channel"] != command["channel"]
+        or not isinstance(result["version"], str)
+        or not re.fullmatch(r"[A-Za-z0-9.+:~_-]{1,128}", result["version"])
+    ):
+        return {"ok": False, "error": "Uppdateringsscriptet returnerade ett ogiltigt resultat."}
+    return result
+
+
 def execute_agent_command(command, config_path):
     if isinstance(command, dict) and command.get("action") == "dtmf":
         return execute_dtmf_command(command, config_path)
     if isinstance(command, dict) and command.get("action") == "service":
         return execute_service_command(command)
+    if isinstance(command, dict) and command.get("action") == "update":
+        return execute_update_command(command)
     if isinstance(command, dict) and command.get("action") == "schedules":
         return execute_schedules(command, config_path)
     return execute_config_command(command)
@@ -468,5 +518,3 @@ if __name__ == "__main__":
     except RuntimeError as exc:
         logging.error("%s", exc)
         raise SystemExit(1)
-
-

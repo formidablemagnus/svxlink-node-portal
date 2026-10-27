@@ -121,13 +121,50 @@ its settings.
 
 On an online node's detail page, portal administrators can start or stop the
 `svxlink.service`. The latest log lines from the node are shown first. The agent
-installer grants the `svxlink` account sudo access only to the fixed
-configuration helper and `systemctl start/stop svxlink.service`; reinstall or
-update the agent role to install this rule.
+installer limits the `svxlink` account's sudo access to the fixed configuration
+and SvxLink-update helpers, SvxLink service controls, and the crontab operations
+used for schedules; reinstall or update the agent role to install these rules.
 
 The log panel can be filtered by free-text search (optionally as a regular
 expression) and by level (errors, warnings, other). Filtering happens in the
 browser on the lines already reported by the node.
+
+### Update SvxLink
+
+On a node's detail page, an administrator can choose **Senaste pre-release**
+or **Senaste stabila release** and start an update. Pre-release builds use the
+latest `master` commit; stable builds use the latest non-prerelease GitHub
+release. Both build a Debian package and restart `svxlink.service` after
+installation. The command and its result are recorded in the portal audit log.
+Builds can take several hours, so keep the node online and allow the command to
+finish.
+
+The installer creates a separate, non-login `svxlink-node-updater` account.
+It keeps its source checkout and CMake build directory in
+`/var/lib/svxlink-node-updater/svxlink`. On the first update it clones the
+official `sm0svx/svxlink` repository and configures the build with Qt disabled
+and Debian package generation enabled. The node needs internet access to
+GitHub and the same SvxLink compiler, library and documentation dependencies
+used for a source build (including `g++`, `cmake`, `make`, `git`, `curl`,
+`doxygen` and `groff`). Missing build dependencies or a failed build are
+reported in the node page; install the missing dependencies and retry.
+For Debian 12/Raspberry Pi OS, the upstream source-build guide lists these
+packages:
+
+```bash
+sudo apt install g++ cmake make libsigc++-2.0-dev libgsm1-dev libpopt-dev \
+  tcl-dev libgcrypt20-dev libspeex-dev libasound2-dev libopus-dev librtlsdr-dev \
+  doxygen groff alsa-utils vorbis-tools curl libcurl4-openssl-dev git rtl-sdr \
+  libjsoncpp-dev libgpiod-dev libssl-dev ladspa-sdk
+```
+
+The build runs as the separate, unprivileged updater account, not as the node
+agent. The installer grants the agent access to one root-owned helper with no
+command-line arguments; it accepts only the two channel choices. A transient
+systemd unit runs the fixed build workflow, validates the resulting SvxLink
+package, installs it with `dpkg`, and restarts the fixed SvxLink service.
+Installing a package executes its maintainer scripts as root, so only use this
+feature when you trust the selected upstream SvxLink source.
 
 ### Node information
 
@@ -151,8 +188,8 @@ edit configuration, node information, schedules or DTMF buttons, manage users, r
 log, or use backup/restore. Those controls are hidden for operators and the
 server rejects the requests with 403. Role `admin` can do everything.
 
-Every command sent to a node (DTMF sequence, service start/stop, configuration
-read/write, schedule read/write), node creation and user changes are recorded
+Every command sent to a node (DTMF sequence, service start/stop, SvxLink
+updates, configuration read/write, schedule read/write), node creation and user changes are recorded
 in the audit log with the acting user, time, node and outcome (queued,
 completed, failed, expired). Configuration contents are never logged, only the
 document name. The log keeps the latest 5000 entries; the DTMF sequences sent

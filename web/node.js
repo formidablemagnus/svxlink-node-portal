@@ -18,6 +18,10 @@ const serviceStopButton = document.getElementById('service-stop');
 const serviceRestartButton = document.getElementById('service-restart');
 const serviceCommandStatus = document.getElementById('service-command-status');
 let serviceCommandRunning = false;
+const updateStartButton = document.getElementById('update-start');
+const updateChannel = document.getElementById('update-channel');
+const updateCommandStatus = document.getElementById('update-command-status');
+let updateRunning = false;
 let nodeOnline = false;
 let serviceActive = null;
 let serviceStatusExpected = null;
@@ -25,10 +29,13 @@ const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, mill
 
 function updateServiceControls() {
   const waitingForStatus = serviceStatusExpected !== null;
-  serviceStartButton.disabled = !nodeOnline || serviceCommandRunning || waitingForStatus || serviceActive !== false;
-  serviceStopButton.disabled = !nodeOnline || serviceCommandRunning || waitingForStatus || serviceActive !== true;
-    serviceRestartButton.disabled = serviceStopButton.disabled;
-  }
+  const serviceDisabled = !nodeOnline || serviceCommandRunning || updateRunning || waitingForStatus;
+  serviceStartButton.disabled = serviceDisabled || serviceActive !== false;
+  serviceStopButton.disabled = serviceDisabled || serviceActive !== true;
+  serviceRestartButton.disabled = serviceStopButton.disabled;
+  updateChannel.disabled = updateRunning;
+  updateStartButton.disabled = !nodeOnline || serviceCommandRunning || updateRunning;
+}
 
 function renderRadio(radio) {
   for (const [key, label, activeText, activeClass] of [['tx', 'TX', 'sänder', 'radio-tx'], ['rx', 'RX', 'tar emot', 'radio-rx']]) {
@@ -249,13 +256,15 @@ function renderNode(node) {
   document.getElementById('updated').textContent = `Uppdaterad ${new Date().toLocaleTimeString('sv-SE')}`;
 }
 
-async function waitForCommand(commandId, successMessage, failureMessage) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    await wait(1000);
+async function waitForCommand(commandId, successMessage, failureMessage, maxAttempts = 60, pollInterval = 1000) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await wait(pollInterval);
     const response = await fetch(`/api/commands/${encodeURIComponent(commandId)}`, {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const result = await response.json();
-    if (result.status === 'completed') return successMessage;
+    if (result.status === 'completed') {
+      return typeof successMessage === 'function' ? successMessage(result.result) : successMessage;
+    }
     if (result.status === 'failed') throw new Error(result.result?.error || failureMessage);
     if (result.status === 'expired') throw new Error('Åtgärden hann löpa ut innan nodagenten tog emot den.');
   }
@@ -311,6 +320,42 @@ async function controlService(operation) {
 serviceStartButton.addEventListener('click', () => controlService('start'));
 serviceStopButton.addEventListener('click', () => controlService('stop'));
 serviceRestartButton.addEventListener('click', () => controlService('restart'));
+
+async function updateSvxLink() {
+  const channel = updateChannel.value;
+  const labels = {prerelease: 'senaste pre-release', release: 'senaste stabila release'};
+  if (!labels[channel] || !window.confirm(
+    `Starta uppdatering till ${labels[channel]}? SvxLink byggs och installeras, och nodens SvxLink-tjänst startas om.`
+  )) return;
+
+  updateRunning = true;
+  updateServiceControls();
+  updateCommandStatus.textContent = `Hämtar och bygger ${labels[channel]}. Det kan ta flera timmar…`;
+  try {
+    const response = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}/update-commands`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({channel})
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    const message = await waitForCommand(
+      data.command_id,
+      (result) => `SvxLink ${result.version} installerades via ${labels[result.channel]}.`,
+      'Uppdateringen misslyckades.',
+      5400,
+      3000
+    );
+    updateCommandStatus.textContent = message;
+  } catch (error) {
+    updateCommandStatus.textContent = `SvxLink kunde inte uppdateras: ${error.message}`;
+  } finally {
+    updateRunning = false;
+    updateServiceControls();
+  }
+}
+
+updateStartButton.addEventListener('click', updateSvxLink);
 
 const presetContainer = document.getElementById('dtmf-presets');
 const reflectorContainer = document.getElementById('reflector-tgs');

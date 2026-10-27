@@ -5,7 +5,7 @@ import os
 import tempfile
 import threading
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -20,8 +20,11 @@ from portal.server import (
     complete_agent_command,
     create_backup,
     database,
+    enqueue_agent_command,
+    hash_password,
     provision_node,
     restore_backup,
+    take_agent_command_result,
     validate_dtmf_command,
     validate_status,
 )
@@ -742,6 +745,156 @@ class PortalServiceCommandTests(unittest.TestCase):
                 self.assertIn('id="service-restart"', detail_page)
                 self.assertIn("Du kan nu starta den.", node_script)
                 self.assertIn("Du kan nu stänga av den.", node_script)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+
+class PortalUpdateCommandTests(unittest.TestCase):
+    def test_update_command_is_admin_only_and_keeps_a_long_build_alive(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {
+                "PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3"),
+                "PORTAL_ADMIN_USER": "admin",
+                "PORTAL_ADMIN_PASSWORD": "this-is-a-long-test-password",
+            },
+        ):
+            node = provision_node("Update node")
+            with database() as connection:
+                connection.execute(
+                    "UPDATE nodes SET last_seen = ? WHERE id = ?",
+                    ("2999-01-01T00:00:00+00:00", node["node_id"]),
+                )
+                connection.execute(
+                    "INSERT INTO portal_users (username, password_hash, role, created_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (
+                        "operator",
+                        hash_password("Operator-password-1"),
+                        "operator",
+                        "2025-01-01T00:00:00+00:00",
+                    ),
+                )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://127.0.0.1:{server.server_port}"
+                admin_credentials = base64.b64encode(
+                    b"admin:this-is-a-long-test-password"
+                ).decode()
+                admin_headers = {
+                    **session_header(base_url, admin_credentials),
+                    "Content-Type": "application/json",
+                }
+                operator_credentials = base64.b64encode(
+                    b"operator:Operator-password-1"
+                ).decode()
+                operator_headers = {
+                    **session_header(base_url, operator_credentials),
+                    "Content-Type": "application/json",
+                }
+                endpoint = f"{base_url}/api/nodes/{node['node_id']}/update-commands"
+                with self.assertRaises(HTTPError) as invalid_channel:
+                    urlopen(
+                        Request(
+                            endpoint,
+                            data=json.dumps({"channel": "master"}).encode(),
+                            headers=admin_headers,
+                        ),
+                        timeout=2,
+                    )
+                self.assertEqual(invalid_channel.exception.code, 400)
+                with self.assertRaises(HTTPError) as forbidden:
+                    urlopen(
+                        Request(
+                            endpoint,
+                            data=json.dumps({"channel": "release"}).encode(),
+                            headers=operator_headers,
+                        ),
+                        timeout=2,
+                    )
+                self.assertEqual(forbidden.exception.code, 403)
+
+                with urlopen(
+                    Request(
+                        endpoint,
+                        data=json.dumps({"channel": "release"}).encode(),
+                        headers=admin_headers,
+                    ),
+                    timeout=2,
+                ) as response:
+                    command_id = json.loads(response.read())["command_id"]
+                self.assertEqual(
+                    claim_agent_commands(node["node_id"]),
+                    [{
+                        "id": command_id,
+                        "action": "update",
+                        "channel": "release",
+                    }],
+                )
+                old = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+                with database() as connection:
+                    connection.execute(
+                        "UPDATE agent_commands SET created_at = ?, updated_at = ? WHERE id = ?",
+                        (old, old, command_id),
+                    )
+                self.assertEqual(claim_agent_commands(node["node_id"]), [])
+                self.assertEqual(take_agent_command_result(command_id), {"status": "in_progress"})
+                service_id = enqueue_agent_command(
+                    node["node_id"],
+                    {"action": "service", "operation": "restart"},
+                    "admin",
+                )
+                self.assertEqual(claim_agent_commands(node["node_id"]), [])
+                self.assertTrue(complete_agent_command(
+                    node["node_id"],
+                    command_id,
+                    {"ok": True, "channel": "release", "version": "26.05.2"},
+                ))
+                self.assertEqual(
+                    take_agent_command_result(command_id),
+                    {
+                        "status": "completed",
+                        "result": {"ok": True, "channel": "release", "version": "26.05.2"},
+                    },
+                )
+                self.assertEqual(
+                    claim_agent_commands(node["node_id"]),
+                    [{"id": service_id, "action": "service", "operation": "restart"}],
+                )
+                self.assertTrue(complete_agent_command(
+                    node["node_id"], service_id, {"ok": True}
+                ))
+                with urlopen(
+                    Request(
+                        f"{base_url}/api/audit",
+                        headers={**session_header(base_url, admin_credentials)},
+                    ),
+                    timeout=2,
+                ) as response:
+                    updates = [
+                        entry for entry in json.loads(response.read())["entries"]
+                        if entry["action"] == "update"
+                    ]
+                self.assertEqual(
+                    (updates[0]["detail"], updates[0]["outcome"]),
+                    ("release", "completed"),
+                )
+                with urlopen(
+                    Request(
+                        f"{base_url}/nodes/{node['node_id']}",
+                        headers={**session_header(base_url, admin_credentials)},
+                    ),
+                    timeout=2,
+                ) as response:
+                    self.assertIn('id="update-start"', response.read().decode("utf-8"))
+                self.assertIn(
+                    "/update-commands",
+                    fetch_asset(base_url, session_header(base_url, admin_credentials), "node.js"),
+                )
             finally:
                 server.shutdown()
                 server.server_close()

@@ -93,6 +93,21 @@
       </div>
       <p id="service-command-status" class="editor-status" role="status" aria-live="polite"></p>
     </section>
+    <section class="panel" data-admin-only hidden>
+      <div class="panel-heading">
+        <div><h2>Uppdatera SvxLink</h2><p class="muted">Bygger och installerar vald version. SvxLink startas om när paketet har installerats.</p></div>
+      </div>
+      <label for="update-channel">Versionstyp</label>
+      <div class="service-actions">
+        <select id="update-channel">
+          <option value="prerelease">Senaste pre-release (master)</option>
+          <option value="release">Senaste stabila release</option>
+        </select>
+        <button id="update-start" type="button" disabled>Uppdatera SvxLink</button>
+      </div>
+      <p class="muted">Bygget kan ta lång tid. Låt noden vara igång tills åtgärden är klar.</p>
+      <p id="update-command-status" class="editor-status" role="status" aria-live="polite"></p>
+    </section>
     </div>
     <section class="panel" id="node-info-panel" hidden>
       <div class="panel-heading">

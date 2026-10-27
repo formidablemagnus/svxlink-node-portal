@@ -156,6 +156,7 @@ button { padding: 8px 12px; border: 1px solid #4b4b4b; border-radius: 6px; backg
 button:hover:not(:disabled) { border-color: var(--blue); }
 button:disabled { opacity: .55; cursor: not-allowed; }
 .service-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.service-actions select { min-width: 220px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #151515; color: var(--text); font: inherit; }
 .config-editor textarea { display: block; width: 100%; min-height: 220px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: #151515; color: var(--text); font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; resize: vertical; }
 .service-log-form { margin-top: 16px; }
 .service-log-form label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
