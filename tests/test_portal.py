@@ -315,8 +315,8 @@ class PortalStatusTests(unittest.TestCase):
             try:
                 base_url = f"http://127.0.0.1:{server.server_port}"
                 report = {
-                    "active": True,
-                    "service_status": "active",
+                    "active": False,
+                    "service_status": "inactive",
                     "current_tg": "240",
                     "logic": "RepeaterLogic",
                     "callsign": "SA7TEST",
@@ -358,6 +358,11 @@ class PortalStatusTests(unittest.TestCase):
                     dashboard = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(dashboard["nodes"][0]["name"], "Test node")
                 self.assertTrue(dashboard["nodes"][0]["online"])
+                self.assertFalse(dashboard["nodes"][0]["status"]["active"])
+                self.assertEqual(
+                    dashboard["nodes"][0]["status"]["service_status"],
+                    "inactive",
+                )
                 self.assertEqual(dashboard["nodes"][0]["status"]["radio"]["mode"], "rx")
 
                 detail_request = Request(
@@ -399,6 +404,10 @@ class PortalStatusTests(unittest.TestCase):
                 )
                 self.assertIn("/config\" aria-label=\"Redigera konfiguration för", dashboard_script)
                 self.assertIn("title=\"Redigera konfiguration\"", dashboard_script)
+                self.assertIn(
+                    "${node.online ? 'Online' : 'Offline'}",
+                    dashboard_script,
+                )
 
                 config_page_request = Request(
                     f"{base_url}/nodes/{node['node_id']}/config",

@@ -71,7 +71,7 @@ function renderNodes(nodes, latestSvxlink, canDeleteNodes) {
     const logTitle = `Senaste loggrader: ${errorCount} fel, ${warningCount} varningar`;
     return `<tr>
       <td><strong><span class="node-icon ${node.online ? 'node-online' : 'node-offline'}" title="${esc(logic.LOGIC_TITLES[type])}" role="img" aria-label="${esc(logic.LOGIC_TITLES[type])}">${logic.ICONS[type]}</span> <a href="/nodes/${encodeURIComponent(node.id)}">${esc(node.name)}</a></strong>${status.callsign ? `<small>${esc(status.callsign)}</small>` : ''}</td>
-      <td><span class="status-badge ${node.online ? 'online' : 'offline'}">${node.online ? esc(SERVICE_LABELS[status.service_status] || status.service_status || 'Online') : 'Offline'}</span></td>
+      <td><span class="status-badge ${node.online ? 'online' : 'offline'}">${node.online ? 'Online' : 'Offline'}</span></td>
       <td><span class="status-badge ${serviceClass}" title="SvxLink-tjänst: ${esc(serviceLabel)}">${esc(serviceLabel)}</span></td>
       <td>${esc(radioNames[radio.mode] || 'Okänd')}</td>
       <td>${node.online && Number.isInteger(radio.signal_level) ? signalRing(radio.signal_level) : '—'}</td>
