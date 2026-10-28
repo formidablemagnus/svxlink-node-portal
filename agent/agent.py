@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import socket
 import stat
 import subprocess
 import threading
@@ -18,6 +19,7 @@ from agent.collector import Collector, clean_text, read_config_sections
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 NETWORK_ERRORS = (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError)
+UDP_RETRY_SECONDS = 600
 RADIO_BATCH_SIZE = 50
 LOG_BATCH_SIZE = 50
 LOG_LINE_BYTES = 512
@@ -431,6 +433,11 @@ class NodeAgent:
         self.commands_url = f"{portal_url}/api/v1/agent/commands"
         self.logs_url = f"{portal_url}/api/v1/agent/logs"
         self.audio_url = f"{portal_url}/api/v1/agent/audio"
+        self.portal_url = portal_url
+        self.token = token
+        self.audio_udp_port = None
+        self.udp_exchange = None
+        self.udp_blocked_until = 0.0
         self.bridge = audio.AudioBridge(
             config_path, read_config_sections,
             max(1, min(2, int(os.environ["AGENT_UDP_CHANNELS"])))
@@ -527,6 +534,21 @@ class NodeAgent:
                 time.sleep(0.2)
 
     def audio_exchange(self, payload):
+        udp = self.udp_exchange
+        if udp is not None:
+            reply = udp.exchange(payload)
+            if reply is not None:
+                return reply
+            if not udp.answered:
+                logging.warning(
+                    "Portalen svarar inte på UDP-ljud %s:%s, använder HTTP.", *udp.address
+                )
+                self.udp_blocked_until = time.monotonic() + UDP_RETRY_SECONDS
+            self.udp_exchange = None
+            self.bridge.exchange_seconds = audio.EXCHANGE_SECONDS
+        return self.http_audio_exchange(payload)
+
+    def http_audio_exchange(self, payload):
         request = Request(
             self.audio_url, data=payload,
             headers={**self.headers, "Content-Type": "application/octet-stream"},
@@ -538,12 +560,31 @@ class NodeAgent:
             logging.debug("Ljudutbyte med portalen misslyckades: %s", exc)
             return None
 
+    def audio_udp_address(self):
+        if (self.audio_udp_port is None or os.environ.get("AGENT_AUDIO_UDP", "").lower() == "off"
+                or time.monotonic() < self.udp_blocked_until):
+            return None
+        host = os.environ.get("AGENT_AUDIO_UDP_HOST") or urlparse(self.portal_url).hostname
+        port = int(os.environ.get("AGENT_AUDIO_UDP_PORT") or self.audio_udp_port)
+        try:
+            return socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_DGRAM)[0][4]
+        except (OSError, UnicodeError):
+            return None
+
     def audio_session(self):
         started = time.monotonic()
         previous_error = self.bridge.last_error
+        address = self.audio_udp_address()
+        self.udp_exchange = audio.UdpExchange(self.node_id, self.token, address) if address else None
+        self.bridge.exchange_seconds = (
+            audio.UDP_EXCHANGE_SECONDS if address else audio.EXCHANGE_SECONDS
+        )
         try:
             self.bridge.run(self.audio_exchange)
         finally:
+            if self.udp_exchange is not None:
+                self.udp_exchange.close()
+                self.udp_exchange = None
             if self.bridge.last_error != previous_error:
                 self.status_wake.set()
             if time.monotonic() - started < 2:
@@ -551,6 +592,8 @@ class NodeAgent:
             self.audio_lock.release()
 
     def handle_command_response(self, response):
+        port = response.get("audio_udp_port")
+        self.audio_udp_port = port if isinstance(port, int) and 0 < port < 65536 else None
         if response.get("audio") is True and self.audio_lock.acquire(blocking=False):
             threading.Thread(target=self.audio_session, name="audio", daemon=True).start()
 

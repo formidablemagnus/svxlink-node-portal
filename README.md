@@ -312,6 +312,25 @@ continuous transmission. Without `SQL_DET=PTY` the audio is still delivered, so
 a VOX squelch can be used instead. Behind a reverse proxy, disable response
 buffering for `/api/nodes/*/audio` (the portal sends `X-Accel-Buffering: no`).
 
+**UDP transport between agent and portal.** By default the agent exchanges
+audio with the portal over HTTP, which stutters on high-latency or jittery
+links. When the portal and node share a direct network (for example
+Tailscale), enable the UDP transport by adding to
+`/etc/default/svxlink-node-portal` and restarting the portal:
+
+```
+PORTAL_AUDIO_UDP_PORT=10001
+```
+
+Allow that UDP port in the portal's firewall. The agent learns the port from
+the portal and sends to the host in `AGENT_PORTAL_URL`. If the URL points at a
+reverse proxy, set `AGENT_AUDIO_UDP_HOST` (and optionally
+`AGENT_AUDIO_UDP_PORT`) in `/etc/default/svxlink-node-agent` to the portal's
+own address. `AGENT_AUDIO_UDP=off` disables UDP on a node. Packets are
+authenticated with an HMAC derived from the node token but are not encrypted,
+so use a private or encrypted network. If the portal does not answer, the
+agent falls back to HTTP automatically and retries UDP after 10 minutes.
+
 Use `portal` or `agent` when installing on separate servers. If both roles
 should run on the same machine, use `sudo bash ./install.sh both` or run the
 installer interactively without an argument.

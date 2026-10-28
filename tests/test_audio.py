@@ -161,6 +161,40 @@ class AudioHubTests(unittest.TestCase):
             validate_udp_audio({"listen": "yes"})
 
 
+class UdpTransportTests(unittest.TestCase):
+    def test_udp_exchange_relays_audio_and_rejects_bad_token(self):
+        from portal.audio_udp import AudioUdpServer
+        from portal.server import node_audio_key, touch_node
+
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3")},
+        ):
+            node = provision_node("UDP node")
+            hub = AudioHub()
+            server = AudioUdpServer("127.0.0.1", 0, hub, node_audio_key, touch_node)
+            server.start()
+            address = ("127.0.0.1", server.port)
+            good = audio.UdpExchange(node["node_id"], node["token"], address)
+            bad = audio.UdpExchange(node["node_id"], "x" * 40, address)
+            bad.REPLY_TIMEOUT = 0.1
+            try:
+                self.assertIsNone(bad.exchange(b"\x01\x00"))
+                self.assertEqual(hub.wait(node["node_id"], 0, 0)[1], [])
+
+                hub.subscribe(node["node_id"])
+                reply = good.exchange(b"\x05\x00" * 10)
+                self.assertEqual(reply, b"\x01")
+                self.assertEqual(hub.wait(node["node_id"], 0, 0)[1], [b"\x05\x00" * 10])
+
+                hub.push_mic(node["node_id"], "admin", True, b"\x02\x00" * 5)
+                reply = good.exchange(b"")
+                self.assertEqual(reply, bytes([3]) + b"\x02\x00" * 5)
+            finally:
+                good.close()
+                bad.close()
+                server.close()
+
+
 class PortalAudioEndpointTests(unittest.TestCase):
     def test_audio_flows_between_agent_and_browser(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(

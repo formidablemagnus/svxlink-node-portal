@@ -6,11 +6,14 @@ via den. Ljudet går över portalens HTTP-anslutning som 16 kHz mono PCM16.
 PTT styrs via SvxLinks squelch-PTY (``SQL_DET=PTY`` och ``SQL_PTY``).
 """
 import array
+import hashlib
+import hmac
 import logging
 import os
 import queue
 import socket
 import stat
+import struct
 import sys
 import threading
 import time
@@ -21,6 +24,7 @@ DEFAULT_CARD_RATE = 16000
 UDP_CHANNELS = 2
 MAX_PAYLOAD_BYTES = 48 * 1024
 EXCHANGE_SECONDS = 0.04
+UDP_EXCHANGE_SECONDS = 0.02
 MAX_CONSECUTIVE_FAILURES = 5
 MAX_PTT_SECONDS = 180
 PTT_DRAIN_SECONDS = 0.3
@@ -239,11 +243,75 @@ class PttControl:
             logging.warning("Kunde inte släppa PTT via %s: %s", self.path, exc)
 
 
+class UdpExchange:
+    """Audio exchange with the portal over UDP; mirrors portal/audio_udp.py."""
+
+    MAGIC = b"SVA1"
+    MAC_BYTES = 16
+    REPLY_TIMEOUT = 0.25
+    MAX_REPLY_BYTES = 4096
+    HOLD_TIMEOUTS = 50
+
+    def __init__(self, node_id, token, address):
+        self.node_id = node_id.encode("ascii")
+        self.key = hashlib.sha256(token.encode("utf-8")).hexdigest().encode("ascii")
+        self.address = address
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.seq = 0
+        self.last_flags = 0
+        self.timeouts = 0
+        self.answered = False
+
+    def close(self):
+        self.sock.close()
+
+    def _mac(self, direction, head, body):
+        return hmac.new(self.key, direction + head + body, hashlib.sha256).digest()[:self.MAC_BYTES]
+
+    def exchange(self, payload):
+        """Return the portal reply, ``b""`` style flags on a lost reply, or None when unreachable."""
+        self.seq += 1
+        ts = int(time.time())
+        id_head = bytes([len(self.node_id)]) + self.node_id
+        head = id_head + struct.pack(">II", ts, self.seq)
+        packet = self.MAGIC + head + self._mac(b"Q", head, payload) + payload
+        expected = struct.pack(">II", ts, self.seq)
+        try:
+            self.sock.sendto(packet, self.address)
+            deadline = time.monotonic() + self.REPLY_TIMEOUT
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise socket.timeout()
+                self.sock.settimeout(remaining)
+                data, _ = self.sock.recvfrom(self.MAX_REPLY_BYTES)
+                prefix = len(self.MAGIC)
+                if not data.startswith(self.MAGIC) or data[prefix:prefix + 8] != expected:
+                    continue
+                mac = data[prefix + 8:prefix + 8 + self.MAC_BYTES]
+                body = data[prefix + 8 + self.MAC_BYTES:]
+                if hmac.compare_digest(mac, self._mac(b"R", expected, body)):
+                    self.timeouts = 0
+                    self.answered = True
+                    self.last_flags = body[0] if body else 0
+                    return body
+        except socket.timeout:
+            self.timeouts += 1
+        except OSError as exc:
+            logging.debug("UDP-ljudutbyte misslyckades: %s", exc)
+            self.timeouts += 1
+        if not self.answered or self.timeouts > self.HOLD_TIMEOUTS:
+            return None
+        # A lost reply must not drop PTT, so repeat the last flags without microphone audio.
+        return bytes([self.last_flags])
+
+
 class AudioBridge:
     def __init__(self, config_path, read_sections, channels=None):
         self.config_path = config_path
         self.read_sections = read_sections
         self.channels = channels
+        self.exchange_seconds = EXCHANGE_SECONDS
         self.last_error = ""
         self.mic_frames = 0
         self.on_activity = None
@@ -274,7 +342,7 @@ class AudioBridge:
         return listener, sender
 
     def _collect(self, listener, tx):
-        deadline = time.monotonic() + EXCHANGE_SECONDS
+        deadline = time.monotonic() + self.exchange_seconds
         channels = self.channels or (tx["channels"] if tx else UDP_CHANNELS)
         tx_rate = tx["rate"] if tx else WIRE_RATE
         chunks, size = [], 0

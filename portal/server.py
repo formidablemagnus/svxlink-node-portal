@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+from portal.audio_udp import AudioUdpServer
 from portal.reflector import REFLECTOR_HUB
 from portal.version import read_version
 
@@ -297,7 +298,7 @@ class AudioHub:
             del node["mic"][:-MAX_MIC_BUFFER_BYTES]
             return True, owner is None, user
 
-    def take_for_agent(self, node_id):
+    def take_for_agent(self, node_id, max_mic=None):
         """Return (flags, mic_pcm) for an agent audio exchange."""
         now = time.monotonic()
         with self.condition:
@@ -305,13 +306,36 @@ class AudioHub:
             if node is None:
                 return 0, b""
             ptt = self._owner(node, now) is not None
-            mic = bytes(node["mic"])
-            node["mic"].clear()
+            limit = len(node["mic"]) if max_mic is None else max_mic // 2 * 2
+            mic = bytes(node["mic"][:limit])
+            del node["mic"][:limit]
             wanted = node["listeners"] > 0 or ptt or bool(mic)
             return (1 if wanted else 0) | (2 if ptt or mic else 0), mic
 
 
 AUDIO_HUB = AudioHub()
+AUDIO_UDP = None
+
+
+def node_audio_key(node_id):
+    with database() as connection:
+        row = connection.execute(
+            "SELECT token_hash FROM nodes WHERE id = ?", (node_id,)
+        ).fetchone()
+    return row["token_hash"].encode("ascii") if row else None
+
+
+def start_audio_udp():
+    """Start the optional UDP audio endpoint when PORTAL_AUDIO_UDP_PORT is set."""
+    global AUDIO_UDP
+    raw_port = os.environ.get("PORTAL_AUDIO_UDP_PORT", "").strip()
+    if not raw_port or raw_port == "0":
+        return
+    host = os.environ.get("PORTAL_AUDIO_UDP_HOST", "0.0.0.0")
+    AUDIO_UDP = AudioUdpServer(host, int(raw_port), AUDIO_HUB, node_audio_key, touch_node)
+    AUDIO_UDP.start()
+    logging.info("UDP-ljud lyssnar på %s:%s.", host, AUDIO_UDP.port)
+
 
 class LiveLogStore:
     """In-memory ring buffer of streamed log lines per node."""
@@ -1962,6 +1986,7 @@ class PortalHandler(BaseHTTPRequestHandler):
                 "commands": claim_agent_commands(node_id),
                 "watch": RADIO_HUB.watched(node_id),
                 "audio": AUDIO_HUB.wanted(node_id),
+                "audio_udp_port": AUDIO_UDP.port if AUDIO_UDP else None,
             })
             return
         if path == "/login":
@@ -2761,6 +2786,7 @@ def serve():
     host = os.environ.get("PORTAL_HOST", "127.0.0.1")
     port = int(os.environ.get("PORTAL_PORT", "8080"))
     server = ThreadingHTTPServer((host, port), PortalHandler)
+    start_audio_udp()
     logging.info("Portal lyssnar på %s:%s.", host, port)
     try:
         server.serve_forever()
