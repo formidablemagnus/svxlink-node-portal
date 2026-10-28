@@ -211,36 +211,48 @@ create_portal_environment() {
 }
 
 create_agent_environment() {
-  if [[ -e "$AGENT_ENV" ]]; then
-    printf 'Behåller befintlig konfiguration: %s\n' "$AGENT_ENV"
-    chown root:root "$AGENT_ENV"
-    chmod 0600 "$AGENT_ENV"
-    return
+  local portal_url node_id token config_path log_path interval
+  if [[ -n "${AGENT_PORTAL_URL-}" && -n "${AGENT_NODE_ID-}" && -n "${AGENT_TOKEN-}" ]]; then
+    # Uppgifterna kommer från installationskommandot i portalen: inga frågor och
+    # befintlig konfiguration ersätts, så att noden kan anslutas till en ny portal.
+    portal_url="$AGENT_PORTAL_URL"
+    node_id="$AGENT_NODE_ID"
+    token="$AGENT_TOKEN"
+    config_path="${SVXLINK_CONFIG:-/etc/svxlink/svxlink.conf}"
+    log_path="${SVXLINK_LOGFILE:-/var/log/svxlink}"
+    interval="${AGENT_INTERVAL_SECONDS:-5}"
+  else
+    if [[ -e "$AGENT_ENV" ]]; then
+      printf 'Behåller befintlig konfiguration: %s\n' "$AGENT_ENV"
+      chown root:root "$AGENT_ENV"
+      chmod 0600 "$AGENT_ENV"
+      return
+    fi
+
+    require_tty
+    prompt_value "Portalens HTTP- eller HTTPS-adress, exempel https://portal.example.net"
+    portal_url="$REPLY"
+    prompt_value "Nod-ID från provision-node"
+    node_id="$REPLY"
+    prompt_secret "Engångstoken från provision-node"
+    token="$REPLY"
+    unset REPLY
+    prompt_value "SvxLinks konfigurationsfil" "/etc/svxlink/svxlink.conf"
+    config_path="$REPLY"
+    prompt_value "SvxLinks loggfil" "/var/log/svxlink"
+    log_path="$REPLY"
+    prompt_value "Rapporteringsintervall i sekunder (ändringar skickas direkt)" "5"
+    interval="$REPLY"
   fi
 
-  require_tty
-  local portal_url node_id token config_path log_path interval
-  prompt_value "Portalens HTTP- eller HTTPS-adress, exempel https://portal.example.net"
-  portal_url="$REPLY"
   if ! python3 -c 'import sys; from urllib.parse import urlparse; u=urlparse(sys.argv[1]); sys.exit(0 if u.scheme in ("http", "https") and u.netloc and not u.username and not u.password and not u.query and not u.fragment else 1)' "$portal_url"; then
     say_error "Portaladressen måste vara en giltig HTTP- eller HTTPS-adress utan inloggningsuppgifter, query eller fragment."
     exit 1
   fi
-  prompt_value "Nod-ID från provision-node"
-  node_id="$REPLY"
-  prompt_secret "Engångstoken från provision-node"
-  token="$REPLY"
-  unset REPLY
   if (( ${#token} < 32 )); then
     say_error "Nodtoken måste innehålla minst 32 tecken."
     exit 1
   fi
-  prompt_value "SvxLinks konfigurationsfil" "/etc/svxlink/svxlink.conf"
-  config_path="$REPLY"
-  prompt_value "SvxLinks loggfil" "/var/log/svxlink"
-  log_path="$REPLY"
-  prompt_value "Rapporteringsintervall i sekunder (ändringar skickas direkt)" "5"
-  interval="$REPLY"
   if [[ ! "$interval" =~ ^[0-9]+$ ]] || (( interval < 1 )); then
     say_error "Rapporteringsintervallet måste vara ett heltal på minst 1 sekund."
     exit 1
@@ -257,12 +269,14 @@ create_agent_environment() {
     AGENT_INTERVAL_SECONDS "$interval" \
     SVXLINK_CONFIG "$config_path" \
     SVXLINK_LOGFILE "$log_path"
-  unset token REPLY
+  unset token REPLY AGENT_TOKEN
   printf 'Agentinställningar sparade i %s (root:root, 0600).\n' "$AGENT_ENV"
 }
 
 usage() {
   printf 'Användning: sudo bash %s [portal|agent|both]\n' "$(basename "$0")"
+  printf 'Agenten installeras utan frågor om AGENT_PORTAL_URL, AGENT_NODE_ID och AGENT_TOKEN är satta.\n'
+  printf 'Körs scriptet utan checkout (curl | bash) hämtas SVX_INSTALL_REPO och SVX_INSTALL_REF från GitHub.\n'
 }
 
 if [[ "${1-}" == "-h" || "${1-}" == "--help" ]]; then
@@ -275,7 +289,44 @@ if [[ ${EUID} -ne 0 ]]; then
   exit 1
 fi
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]-}"
+SCRIPT_DIR=""
+if [[ -n "$SCRIPT_SOURCE" && -f "$SCRIPT_SOURCE" ]]; then
+  SCRIPT_DIR="$(cd -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd)"
+fi
+
+bootstrap_checkout() {
+  local repo="${SVX_INSTALL_REPO:-https://github.com/formidablemagnus/svxlink-node-portal.git}"
+  local ref="${SVX_INSTALL_REF:-main}"
+  if [[ ! "$repo" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+    say_error "SVX_INSTALL_REPO måste vara en https://github.com/ägare/repo-adress."
+    exit 1
+  fi
+  if [[ ! "$ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ || "$ref" == *..* ]]; then
+    say_error "SVX_INSTALL_REF innehåller ogiltiga tecken."
+    exit 1
+  fi
+  if ! command -v git >/dev/null 2>&1; then
+    say_error "git saknas. Installera git och kör kommandot igen."
+    exit 1
+  fi
+  local workdir rc=0
+  workdir="$(mktemp -d)"
+  printf 'Hämtar %s (%s)...\n' "$repo" "$ref"
+  if ! git clone --quiet --depth 1 --branch "$ref" -- "$repo" "$workdir/svxlink-node-portal"; then
+    rm -rf -- "$workdir"
+    say_error "Kunde inte hämta $repo ($ref)."
+    exit 1
+  fi
+  SVX_BOOTSTRAPPED=1 bash "$workdir/svxlink-node-portal/install.sh" "$@" </dev/null || rc=$?
+  rm -rf -- "$workdir"
+  exit "$rc"
+}
+
+if [[ -z "${SVX_BOOTSTRAPPED-}" && ( -z "$SCRIPT_DIR" || -n "${SVX_INSTALL_REPO-}" ) ]] \
+   && [[ -z "$SCRIPT_DIR" || ! -f "$SCRIPT_DIR/portal/server.py" ]]; then
+  bootstrap_checkout "$@"
+fi
 if [[ $# -gt 1 ]]; then
   usage >&2
   exit 2

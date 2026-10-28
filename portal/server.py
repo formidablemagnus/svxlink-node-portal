@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import secrets
+import shlex
 import sqlite3
 import sys
 import threading
@@ -351,6 +352,12 @@ def connect_database():
         )"""
     )
     connection.execute(
+        """CREATE TABLE IF NOT EXISTS portal_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )"""
+    )
+    connection.execute(
         """CREATE TABLE IF NOT EXISTS dtmf_buttons (
             position INTEGER PRIMARY KEY,
             label TEXT NOT NULL,
@@ -447,6 +454,118 @@ def provision_node(name):
             (node_id, clean_name, hashlib.sha256(token.encode("utf-8")).hexdigest(), now),
         )
     return {"node_id": node_id, "name": clean_name, "token": token}
+
+
+NODE_CONFIG_DEFAULTS = {
+    "portal_url": "",
+    "repo_url": "https://github.com/formidablemagnus/svxlink-node-portal",
+    "repo_ref": "main",
+    "svxlink_config": "/etc/svxlink/svxlink.conf",
+    "svxlink_logfile": "/var/log/svxlink",
+    "interval_seconds": 5,
+}
+PORTAL_URL_RE = re.compile(r"https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~/-]*)?")
+GITHUB_REPO_RE = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?")
+GIT_REF_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,99}")
+ABSOLUTE_PATH_RE = re.compile(r"/[A-Za-z0-9._/-]{1,200}")
+
+
+def validate_node_config(payload):
+    if not isinstance(payload, dict) or set(payload) != set(NODE_CONFIG_DEFAULTS):
+        raise ValueError("Nodkonfigurationen har fel fält.")
+    for key in NODE_CONFIG_DEFAULTS:
+        if key != "interval_seconds" and not isinstance(payload[key], str):
+            raise ValueError("Alla fält utom intervallet måste vara text.")
+    portal_url = payload["portal_url"].strip().rstrip("/")
+    if portal_url and (not PORTAL_URL_RE.fullmatch(portal_url) or "//" in portal_url[8:]):
+        raise ValueError(
+            "Portaladressen måste vara en HTTP- eller HTTPS-adress utan inloggningsuppgifter, "
+            "query eller fragment, till exempel https://portal.example.net."
+        )
+    repo = GITHUB_REPO_RE.fullmatch(payload["repo_url"].strip())
+    if not repo:
+        raise ValueError("Repository måste vara en GitHub-adress, till exempel https://github.com/ägare/repo.")
+    repo_ref = payload["repo_ref"].strip()
+    if (
+        not GIT_REF_RE.fullmatch(repo_ref)
+        or ".." in repo_ref
+        or repo_ref.endswith(("/", ".lock"))
+        or "//" in repo_ref
+    ):
+        raise ValueError("Branch eller tagg innehåller ogiltiga tecken.")
+    paths = {}
+    for key, label in (("svxlink_config", "Konfigurationsfilen"), ("svxlink_logfile", "Loggfilen")):
+        value = payload[key].strip()
+        if not ABSOLUTE_PATH_RE.fullmatch(value) or ".." in value.split("/"):
+            raise ValueError(f"{label} måste vara en absolut sökväg utan särtecken.")
+        paths[key] = value
+    interval = payload["interval_seconds"]
+    if type(interval) is not int or not 1 <= interval <= 3600:
+        raise ValueError("Rapporteringsintervallet måste vara 1–3600 sekunder.")
+    return {
+        "portal_url": portal_url,
+        "repo_url": f"https://github.com/{repo.group(1)}/{repo.group(2)}",
+        "repo_ref": repo_ref,
+        "svxlink_config": paths["svxlink_config"],
+        "svxlink_logfile": paths["svxlink_logfile"],
+        "interval_seconds": interval,
+    }
+
+
+def get_node_config(connection=None):
+    def read(conn):
+        return {row["key"]: row["value"] for row in conn.execute(
+            "SELECT key, value FROM portal_settings WHERE key LIKE 'node_config.%'"
+        ).fetchall()}
+
+    if connection is None:
+        with database() as conn:
+            stored = read(conn)
+    else:
+        stored = read(connection)
+    config = dict(NODE_CONFIG_DEFAULTS)
+    for key in config:
+        value = stored.get(f"node_config.{key}")
+        if value is not None:
+            config[key] = int(value) if key == "interval_seconds" else value
+    return config
+
+
+def save_node_config(actor, payload):
+    config = validate_node_config(payload)
+    with database() as connection:
+        for key, value in config.items():
+            connection.execute(
+                "INSERT INTO portal_settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (f"node_config.{key}", str(value)),
+            )
+        record_audit(connection, actor, "node-config.update", config["repo_url"])
+    return config
+
+
+def build_install_command(config, node_id, token):
+    """Return a one-line agent installer command, or None while no portal URL is set."""
+    if not config["portal_url"]:
+        return None
+    repo = config["repo_url"]
+    ref = config["repo_ref"]
+    raw_url = (
+        repo.replace("https://github.com/", "https://raw.githubusercontent.com/", 1)
+        + f"/{ref}/install.sh"
+    )
+    environment = [
+        ("AGENT_PORTAL_URL", config["portal_url"]),
+        ("AGENT_NODE_ID", node_id),
+        ("AGENT_TOKEN", token),
+        ("AGENT_INTERVAL_SECONDS", str(config["interval_seconds"])),
+        ("SVXLINK_CONFIG", config["svxlink_config"]),
+        ("SVXLINK_LOGFILE", config["svxlink_logfile"]),
+        ("SVX_INSTALL_REPO", repo + ".git"),
+        ("SVX_INSTALL_REF", ref),
+    ]
+    assignments = " ".join(f"{name}={shlex.quote(value)}" for name, value in environment)
+    return f"curl -fsSL {shlex.quote(raw_url)} | sudo env {assignments} bash -s -- agent"
 
 
 def validate_status(payload):
@@ -1800,6 +1919,9 @@ class PortalHandler(BaseHTTPRequestHandler):
         elif path == "/api/users":
             if self.require_admin(admin_only=True):
                 self.send_json(200, {"users": list_users()})
+        elif path == "/api/node-config":
+            if self.require_admin(admin_only=True):
+                self.send_json(200, {"config": get_node_config()})
         elif path == "/api/audit":
             if self.require_admin(admin_only=True):
                 query = parse_qs(urlparse(self.path).query)
@@ -2021,7 +2143,24 @@ class PortalHandler(BaseHTTPRequestHandler):
             except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
                 self.send_json(400, {"error": str(exc)})
                 return
-            self.send_json(201, credentials)
+            self.send_json(201, {
+                **credentials,
+                "install_command": build_install_command(
+                    get_node_config(), credentials["node_id"], credentials["token"]
+                ),
+            })
+            return
+        if path == "/api/node-config":
+            if not self.require_admin(admin_only=True):
+                return
+            try:
+                config = save_node_config(
+                    self.actor, self.read_json_body(MAX_REQUEST_BYTES)
+                )
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            self.send_json(200, {"config": config})
             return
         if path == "/api/restore":
             if not self.require_admin(admin_only=True):

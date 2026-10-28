@@ -204,6 +204,10 @@ dialog label { display: block; margin-bottom: 6px; color: var(--muted); }
 dialog input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #151515; color: var(--text); font: inherit; }
 .delete-node-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 16px; }
 .created-node input { display: block; width: 100%; margin-bottom: 10px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.created-node textarea, .node-config-form input { display: block; width: 100%; margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #151515; color: var(--text); font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.created-node textarea { resize: vertical; }
+.created-node > div > label, .node-config-form > label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.node-config-form { max-width: 680px; }
 .selection-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .node-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
 .node-choice { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: #1a1a1a; cursor: pointer; }

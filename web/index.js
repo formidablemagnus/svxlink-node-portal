@@ -166,6 +166,10 @@ document.getElementById('create-node-form').addEventListener('submit', async (ev
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     document.getElementById('created-node-id').value = data.node_id;
     document.getElementById('created-node-token').value = data.token;
+    const command = data.install_command || '';
+    document.getElementById('created-node-command').value = command;
+    document.getElementById('install-command-block').hidden = !command;
+    document.getElementById('install-command-missing').hidden = Boolean(command);
     result.hidden = false;
     form.reset();
     refresh();
@@ -174,6 +178,18 @@ document.getElementById('create-node-form').addEventListener('submit', async (ev
   } finally {
     button.disabled = false;
   }
+});
+document.getElementById('copy-install-command').addEventListener('click', async (event) => {
+  const field = document.getElementById('created-node-command');
+  const button = event.currentTarget;
+  try {
+    await navigator.clipboard.writeText(field.value);
+    button.textContent = 'Kopierat';
+  } catch (cause) {
+    field.select();
+    button.textContent = 'Markerat – tryck Ctrl+C';
+  }
+  setTimeout(() => { button.textContent = 'Kopiera kommando'; }, 3000);
 });
 refresh();
 setInterval(refresh, 1500);

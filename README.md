@@ -104,6 +104,25 @@ available) and run:
 sudo bash ./install.sh agent
 ```
 
+#### One-line install command
+
+Under **Inställningar → Nodkonfig** an admin saves the portal URL, the GitHub
+repository (`https://github.com/owner/repo`), branch/tag, SvxLink config and
+log paths and the report interval. Once the portal URL is set, **Lägg till nod**
+shows a ready-made command of the form
+`curl -fsSL <raw install.sh> | sudo env AGENT_PORTAL_URL=… AGENT_NODE_ID=… AGENT_TOKEN=… bash -s -- agent`.
+It clones the repository to a temporary directory and installs the agent
+without prompts. The node needs `git`, `curl`, `sudo` and `python3`. The
+command contains the token, so it ends up in shell history and the process
+list; it is only shown at creation, and the token can be rotated by creating a
+new node. Nodkonfig is not included in portal backups.
+
+The same non-interactive mode works manually with the variables
+`AGENT_PORTAL_URL`, `AGENT_NODE_ID`, `AGENT_TOKEN`, `AGENT_INTERVAL_SECONDS`,
+`SVXLINK_CONFIG`, `SVXLINK_LOGFILE`, `SVX_INSTALL_REPO` and `SVX_INSTALL_REF`.
+
+#### Interactive install
+
 The installer prompts for the portal HTTP or HTTPS URL, node ID and one-time
 token from `provision-node`, and the SvxLink config and log paths. SvxLink
 must already be installed; the agent runs as `svxlink` and needs read access to

@@ -188,6 +188,41 @@ document.getElementById('restore-form').addEventListener('submit', async (event)
   }
 });
 auditSearch.addEventListener('input', renderAudit);
+
+const nodeConfigFields = {
+  portal_url: 'nc-portal-url', repo_url: 'nc-repo-url', repo_ref: 'nc-repo-ref',
+  svxlink_config: 'nc-config', svxlink_logfile: 'nc-log', interval_seconds: 'nc-interval',
+};
+const nodeConfigStatus = document.getElementById('nodeconfig-status');
+
+function fillNodeConfig(config) {
+  for (const [key, id] of Object.entries(nodeConfigFields)) {
+    document.getElementById(id).value = config[key];
+  }
+  const portalUrl = document.getElementById('nc-portal-url');
+  if (!config.portal_url) portalUrl.placeholder = window.location.origin;
+}
+
+document.getElementById('nodeconfig-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  nodeConfigStatus.textContent = '';
+  const config = {};
+  for (const [key, id] of Object.entries(nodeConfigFields)) {
+    const value = document.getElementById(id).value;
+    config[key] = key === 'interval_seconds' ? Number(value) : value;
+  }
+  try {
+    const data = await api('/api/node-config', {method: 'POST', body: JSON.stringify(config)});
+    fillNodeConfig(data.config);
+    nodeConfigStatus.textContent = 'Nodkonfigurationen är sparad.';
+    await loadAudit();
+  } catch (error) {
+    nodeConfigStatus.textContent = error.message;
+  }
+});
+api('/api/node-config').then((data) => fillNodeConfig(data.config)).catch((error) => {
+  nodeConfigStatus.textContent = error.message;
+});
 document.getElementById('audit-refresh').addEventListener('click', loadAudit);
 
 api('/api/users').then((data) => renderUsers(data.users)).catch((error) => {

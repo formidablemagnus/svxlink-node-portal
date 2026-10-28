@@ -1393,6 +1393,110 @@ class PortalUserAndAuditTests(unittest.TestCase):
                 thread.join(timeout=2)
 
 
+class PortalNodeConfigTests(unittest.TestCase):
+    def test_node_config_and_install_command(self):
+        import shlex
+
+        password = "this-is-a-long-test-password"
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {
+                "PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3"),
+                "PORTAL_ADMIN_USER": "admin",
+                "PORTAL_ADMIN_PASSWORD": password,
+            },
+        ):
+            server = ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f"http://127.0.0.1:{server.server_port}"
+                cookie = login_cookie(base, "admin", password)
+
+                def call(path, body=None, cookie=cookie):
+                    request = Request(
+                        base + path,
+                        data=json.dumps(body).encode() if body is not None else None,
+                        headers={"Cookie": cookie, "Content-Type": "application/json"},
+                    )
+                    with urlopen(request, timeout=3) as response:
+                        return response.status, json.loads(response.read())
+
+                def status(path, body=None, cookie=cookie):
+                    with self.assertRaises(HTTPError) as error:
+                        call(path, body, cookie)
+                    return error.exception.code
+
+                code, data = call("/api/node-config")
+                config = data["config"]
+                self.assertEqual((code, config["portal_url"], config["repo_ref"]), (200, "", "main"))
+
+                # Utan portaladress finns inget färdigt kommando.
+                _, created = call("/api/nodes", {"name": "Utan adress"})
+                self.assertIsNone(created["install_command"])
+
+                config.update(
+                    portal_url="https://portal.example.net/",
+                    repo_ref="develop",
+                    interval_seconds=7,
+                )
+                _, saved = call("/api/node-config", config)
+                self.assertEqual(saved["config"]["portal_url"], "https://portal.example.net")
+                self.assertEqual(call("/api/node-config")[1]["config"], saved["config"])
+
+                _, created = call("/api/nodes", {"name": "Med adress"})
+                command = created["install_command"]
+                self.assertTrue(command.startswith(
+                    "curl -fsSL https://raw.githubusercontent.com/formidablemagnus/"
+                    "svxlink-node-portal/develop/install.sh | sudo env "
+                ))
+                self.assertTrue(command.endswith(" bash -s -- agent"))
+                words = shlex.split(command.split("| sudo env ", 1)[1])
+                values = dict(word.split("=", 1) for word in words if "=" in word)
+                self.assertEqual(values["AGENT_NODE_ID"], created["node_id"])
+                self.assertEqual(values["AGENT_TOKEN"], created["token"])
+                self.assertEqual(values["AGENT_PORTAL_URL"], "https://portal.example.net")
+                self.assertEqual(values["AGENT_INTERVAL_SECONDS"], "7")
+                self.assertEqual(values["SVX_INSTALL_REF"], "develop")
+                self.assertEqual(
+                    values["SVX_INSTALL_REPO"],
+                    "https://github.com/formidablemagnus/svxlink-node-portal.git",
+                )
+
+                bad_values = {
+                    "portal_url": ["ftp://x.example", "https://u:p@x.example", "https://x.example/?q=1",
+                                   "https://x.example/'; reboot #", "javascript:alert(1)"],
+                    "repo_url": ["https://example.com/a/b", "https://github.com/a", "git@github.com:a/b.git"],
+                    "repo_ref": ["-x", "a b", "a;b", "../x", "x/", "$(id)"],
+                    "svxlink_config": ["relative.conf", "/etc/../x", "/etc/a b", "/etc/$HOME"],
+                    "svxlink_logfile": ["/var/log/a;b", ""],
+                    "interval_seconds": [0, 3601, "5", True, None],
+                }
+                for key, values_list in bad_values.items():
+                    for value in values_list:
+                        self.assertEqual(status("/api/node-config", {**saved["config"], key: value}), 400,
+                                         (key, value))
+                self.assertEqual(status("/api/node-config", {"portal_url": "https://a.example"}), 400)
+
+                call("/api/users", {"username": "olle", "password": "Operator-password-1",
+                                    "role": "operator"})
+                operator = login_cookie(base, "olle", "Operator-password-1")
+                self.assertEqual(status("/api/node-config", cookie=operator), 403)
+                self.assertEqual(status("/api/node-config", saved["config"], cookie=operator), 403)
+                actions = [e["action"] for e in call("/api/audit")[1]["entries"]]
+                self.assertIn("node-config.update", actions)
+
+                headers = {"Cookie": cookie}
+                self.assertIn("nodeconfig-panel", urlopen(
+                    Request(f"{base}/admin", headers=headers), timeout=2).read().decode())
+                self.assertIn("install_command", fetch_asset(base, headers, "index.js"))
+                self.assertIn("/api/node-config", fetch_asset(base, headers, "admin.js"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+
 class PortalLoginTests(unittest.TestCase):
     def test_login_page_sessions_and_case_insensitive_users(self):
         import http.client
