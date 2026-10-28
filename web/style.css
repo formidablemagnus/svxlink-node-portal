@@ -124,6 +124,10 @@ td .state::before { width: 12px; height: 12px; }
 .detail-card span { display: block; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
 .detail-card strong { display: block; margin-top: 5px; font-size: 19px; overflow-wrap: anywhere; }
 .detail-card small { display: block; margin-top: 3px; color: var(--muted); }
+.detail-card .radio-states { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; }
+.detail-card .radio-states .status-item { display: inline-flex; align-items: center; gap: 6px; color: inherit; font-size: 15px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.detail-card .radio-states .status-dot { display: inline-block; flex: none; }
+.detail-card .radio-states small { display: inline; margin: 0; font-size: 15px; }
 .detail-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .detail-meta dt { color: var(--muted); font-size: 12px; }
 .detail-meta dd { margin: 3px 0 0; overflow-wrap: anywhere; }
