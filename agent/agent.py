@@ -433,7 +433,8 @@ class NodeAgent:
         self.audio_url = f"{portal_url}/api/v1/agent/audio"
         self.bridge = audio.AudioBridge(
             config_path, read_config_sections,
-            max(1, min(2, int(os.environ.get("AGENT_UDP_CHANNELS", audio.UDP_CHANNELS)))),
+            max(1, min(2, int(os.environ["AGENT_UDP_CHANNELS"])))
+            if os.environ.get("AGENT_UDP_CHANNELS") else None,
         )
         self.audio_lock = threading.Lock()
         self.status_wake = threading.Event()

@@ -66,12 +66,23 @@ def _expand(sections, names, member_key):
     return result
 
 
-def _card_rate(section):
-    try:
-        rate = int(_unquote(section.get("CARD_SAMPLE_RATE", "")))
-    except ValueError:
-        return DEFAULT_CARD_RATE
-    return rate if 8000 <= rate <= 96000 else DEFAULT_CARD_RATE
+def _card_setting(sections, section, key, default, low, high):
+    for source in (section, sections.get("GLOBAL", {})):
+        try:
+            value = int(_unquote(source.get(key, "")))
+        except ValueError:
+            continue
+        if low <= value <= high:
+            return value
+    return default
+
+
+def _card_rate(sections, section):
+    return _card_setting(sections, section, "CARD_SAMPLE_RATE", DEFAULT_CARD_RATE, 8000, 96000)
+
+
+def _card_channels(sections, section):
+    return _card_setting(sections, section, "CARD_CHANNELS", UDP_CHANNELS, 1, 2)
 
 
 def find_udp_audio(sections):
@@ -103,7 +114,9 @@ def find_udp_audio(sections):
     rx = first_udp(rx_names, "RECEIVERS")
     if rx:
         name, section, (host, port) = rx
-        config["rx"] = {"name": name, "host": host, "port": port, "rate": _card_rate(section)}
+        config["rx"] = {"name": name, "host": host, "port": port,
+                        "rate": _card_rate(sections, section),
+                        "channels": _card_channels(sections, section)}
         if _unquote(section.get("SQL_DET", "")).upper() == "PTY":
             config["ptt_path"] = _unquote(section.get("SQL_PTY", ""))
             if not config["ptt_path"]:
@@ -111,7 +124,9 @@ def find_udp_audio(sections):
     tx = first_udp(tx_names, "TRANSMITTERS")
     if tx:
         name, section, (host, port) = tx
-        config["tx"] = {"name": name, "host": host, "port": port, "rate": _card_rate(section)}
+        config["tx"] = {"name": name, "host": host, "port": port,
+                        "rate": _card_rate(sections, section),
+                        "channels": _card_channels(sections, section)}
     return config
 
 
@@ -224,7 +239,7 @@ class PttControl:
 
 
 class AudioBridge:
-    def __init__(self, config_path, read_sections, channels=UDP_CHANNELS):
+    def __init__(self, config_path, read_sections, channels=None):
         self.config_path = config_path
         self.read_sections = read_sections
         self.channels = channels
@@ -255,8 +270,10 @@ class AudioBridge:
             raise
         return listener, sender
 
-    def _collect(self, listener, tx_rate):
+    def _collect(self, listener, tx):
         deadline = time.monotonic() + EXCHANGE_SECONDS
+        channels = self.channels or (tx["channels"] if tx else UDP_CHANNELS)
+        tx_rate = tx["rate"] if tx else WIRE_RATE
         chunks, size = [], 0
         while True:
             remaining = deadline - time.monotonic()
@@ -273,7 +290,7 @@ class AudioBridge:
             except OSError:
                 time.sleep(remaining)
                 break
-            wire = node_to_wire(packet, self.channels, tx_rate)
+            wire = node_to_wire(packet, channels, tx_rate)
             if size + len(wire) <= MAX_PAYLOAD_BYTES:
                 chunks.append(wire)
                 size += len(wire)
@@ -332,12 +349,13 @@ class AudioBridge:
                 name="audio-uplink", daemon=True,
             )
             thread.start()
-        frame_bytes = (rx["rate"] * FRAME_MS // 1000 * self.channels * 2) if rx else 0
+        rx_channels = (self.channels or rx["channels"]) if rx else UDP_CHANNELS
+        frame_bytes = (rx["rate"] * FRAME_MS // 1000 * rx_channels * 2) if rx else 0
         failures = 0
         logging.info("Ljudbrygga startad.")
         try:
             while True:
-                payload = self._collect(listener, tx["rate"] if tx else WIRE_RATE)
+                payload = self._collect(listener, tx)
                 reply = exchange(payload)
                 if reply is None:
                     failures += 1
@@ -353,7 +371,7 @@ class AudioBridge:
                 mic = reply[1:]
                 if wanted:
                     if mic:
-                        converted = wire_to_node(mic, self.channels, rx["rate"])
+                        converted = wire_to_node(mic, rx_channels, rx["rate"])
                         for offset in range(0, len(converted), frame_bytes):
                             frame = converted[offset:offset + frame_bytes]
                             if len(frame) < frame_bytes:

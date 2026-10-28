@@ -97,7 +97,8 @@
 
   function connect() {
     if (connected) return;
-    context = context || new (window.AudioContext || window.webkitAudioContext)();
+    // Spela på exakt 16 kHz så att inga ljudbitar omsamplas var för sig.
+    context = new (window.AudioContext || window.webkitAudioContext)({sampleRate: WIRE_RATE});
     gain = context.createGain();
     gain.gain.value = Number(volume.value);
     gain.connect(context.destination);
@@ -177,7 +178,8 @@
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {channelCount: 1, echoCancellation: true, noiseSuppression: true},
     });
-    const micContext = context || new (window.AudioContext || window.webkitAudioContext)();
+    const micContext = new (window.AudioContext || window.webkitAudioContext)();
+    if (micContext.state === 'suspended') await micContext.resume();
     const source = micContext.createMediaStreamSource(stream);
     const processor = micContext.createScriptProcessor(2048, 1, 1);
     const silent = micContext.createGain();
@@ -189,7 +191,7 @@
     source.connect(processor);
     processor.connect(silent);
     silent.connect(micContext.destination);
-    mic = {stream, source, processor, silent};
+    mic = {stream, source, processor, silent, context: micContext};
     return mic;
   }
 
@@ -200,6 +202,7 @@
     mic.processor.disconnect();
     mic.silent.disconnect();
     mic.stream.getTracks().forEach((track) => track.stop());
+    mic.context.close();
     mic = null;
   }
 
@@ -209,10 +212,6 @@
     errorText.dataset.local = '0';
     setError('');
     try {
-      if (!context) {
-        context = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      if (context.state === 'suspended') await context.resume();
       await openMic();
     } catch (error) {
       pttHeld = false;

@@ -303,9 +303,10 @@ CARD_SAMPLE_RATE=48000
 
 The `[Tx]` address must be local to the node (for example `127.0.0.1`), since
 the agent receives the audio on that UDP port while a browser is connected. The
-`[Rx]` address is where SvxLink listens. UDP audio is assumed to be stereo
-PCM16 (as in `CARD_SAMPLE_RATE`-matching UDP clients); set
-`AGENT_UDP_CHANNELS=1` in `/etc/default/svxlink-node-agent` for mono. PTT is
+`[Rx]` address is where SvxLink listens. The agent reads `CARD_SAMPLE_RATE` and
+`CARD_CHANNELS` from the `[Rx]`/`[Tx]` section, falling back to `[GLOBAL]`
+(defaults: 16000 Hz, 2 channels). Set `AGENT_UDP_CHANNELS=1` or `2` in
+`/etc/default/svxlink-node-agent` to override the channel count. PTT is
 released automatically if the browser stops sending, and after 3 minutes of
 continuous transmission. Without `SQL_DET=PTY` the audio is still delivered, so
 a VOX squelch can be used instead. Behind a reverse proxy, disable response

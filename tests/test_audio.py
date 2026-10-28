@@ -51,6 +51,18 @@ class UdpConfigTests(unittest.TestCase):
         info = audio.describe(plain)
         self.assertFalse(info["listen"] or info["talk"] or info["ptt"])
 
+    def test_card_settings_fall_back_to_global_section(self):
+        data = sections()
+        for name in ("Rx1", "Tx1"):
+            del data[name]["CARD_SAMPLE_RATE"]
+        data["GLOBAL"].update({"CARD_SAMPLE_RATE": "48000", "CARD_CHANNELS": "1"})
+        config = audio.find_udp_audio(data)
+        self.assertEqual((config["tx"]["rate"], config["tx"]["channels"]), (48000, 1))
+        self.assertEqual((config["rx"]["rate"], config["rx"]["channels"]), (48000, 1))
+        del data["GLOBAL"]["CARD_SAMPLE_RATE"], data["GLOBAL"]["CARD_CHANNELS"]
+        config = audio.find_udp_audio(data)
+        self.assertEqual((config["tx"]["rate"], config["tx"]["channels"]), (16000, 2))
+
     def test_voter_receivers_are_expanded(self):
         data = sections()
         data["SimplexLogic"]["RX"] = "Voter"
