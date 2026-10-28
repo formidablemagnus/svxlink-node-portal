@@ -13,7 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from agent import schedules
+from agent import audio, schedules
 from agent.collector import Collector, clean_text, read_config_sections
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -366,7 +366,7 @@ def execute_schedules(command, config_path):
         return {"ok": False, "error": str(exc)}
 
 
-def process_agent_commands(commands_url, results_url, headers, config_path):
+def process_agent_commands(commands_url, results_url, headers, config_path, on_response=None):
     try:
         response = request_json(commands_url, headers=headers)
         commands = response.get("commands") if isinstance(response, dict) else None
@@ -376,6 +376,8 @@ def process_agent_commands(commands_url, results_url, headers, config_path):
         logging.warning("Kunde inte hämta åtgärder från portalen: %s", exc)
         return None
 
+    if on_response is not None:
+        on_response(response)
     watch = response.get("watch") is True
     for command in commands:
         command_id = command.get("id") if isinstance(command, dict) else None
@@ -428,6 +430,12 @@ class NodeAgent:
         self.radio_url = f"{portal_url}/api/v1/agent/radio"
         self.commands_url = f"{portal_url}/api/v1/agent/commands"
         self.logs_url = f"{portal_url}/api/v1/agent/logs"
+        self.audio_url = f"{portal_url}/api/v1/agent/audio"
+        self.bridge = audio.AudioBridge(
+            config_path, read_config_sections,
+            max(1, min(2, int(os.environ.get("AGENT_UDP_CHANNELS", audio.UDP_CHANNELS)))),
+        )
+        self.audio_lock = threading.Lock()
         self.status_wake = threading.Event()
         self.radio_wake = threading.Event()
         self.radio_lock = threading.Lock()
@@ -455,6 +463,7 @@ class NodeAgent:
         while True:
             try:
                 status = self.collector.snapshot()
+                status["udp_audio"]["error"] = self.bridge.last_error[:256]
                 request_json(
                     self.status_url, payload={"node_id": self.node_id, **status},
                     headers=self.headers,
@@ -514,10 +523,39 @@ class NodeAgent:
             else:
                 time.sleep(0.2)
 
+    def audio_exchange(self, payload):
+        request = Request(
+            self.audio_url, data=payload,
+            headers={**self.headers, "Content-Type": "application/octet-stream"},
+        )
+        try:
+            with build_opener(RejectRedirects()).open(request, timeout=5) as response:
+                return response.read(audio.MAX_PAYLOAD_BYTES + 1)
+        except NETWORK_ERRORS as exc:
+            logging.debug("Ljudutbyte med portalen misslyckades: %s", exc)
+            return None
+
+    def audio_session(self):
+        started = time.monotonic()
+        previous_error = self.bridge.last_error
+        try:
+            self.bridge.run(self.audio_exchange)
+        finally:
+            if self.bridge.last_error != previous_error:
+                self.status_wake.set()
+            if time.monotonic() - started < 2:
+                time.sleep(5)
+            self.audio_lock.release()
+
+    def handle_command_response(self, response):
+        if response.get("audio") is True and self.audio_lock.acquire(blocking=False):
+            threading.Thread(target=self.audio_session, name="audio", daemon=True).start()
+
     def command_loop(self):
         while True:
             process_agent_commands(
-                self.commands_url, self.commands_url, self.headers, self.config_path
+                self.commands_url, self.commands_url, self.headers, self.config_path,
+                self.handle_command_response,
             )
             time.sleep(self.command_interval)
 

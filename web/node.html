@@ -70,6 +70,19 @@
       <div id="dtmf-presets" class="preset-buttons"><span class="muted">Laddar knappar…</span></div>
       <p class="muted">Knapparna är gemensamma för alla noder.</p>
     </section>
+    <section class="panel" id="audio-panel" hidden>
+      <div class="panel-heading">
+        <div><h2>Fjärrdrift (UDP-ljud)</h2><p class="muted">Lyssna på noden och sänd via mikrofonen. Anslut ljudet först och håll sedan PTT-knappen nedtryckt när du pratar.</p></div>
+        <span id="audio-state" class="pill">Frånkopplad</span>
+      </div>
+      <div class="dtmf-controls">
+        <button id="audio-connect" type="button" disabled>Anslut ljud</button>
+        <button id="audio-ptt" type="button" class="ptt-button" disabled>Håll för att sända (PTT)</button>
+      </div>
+      <label for="audio-volume">Volym</label>
+      <input id="audio-volume" type="range" min="0" max="1" step="0.05" value="0.8">
+      <p id="audio-error" class="error" role="status" aria-live="polite"></p>
+    </section>
     <div class="panel-grid">
     <section class="panel">
       <div class="panel-heading">
@@ -141,5 +154,6 @@
   </main>
   <script src="/assets/sidebar.js"></script>
   <script src="/assets/node.js"></script>
+  <script src="/assets/audio.js"></script>
 </body>
 </html>

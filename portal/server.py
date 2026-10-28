@@ -145,6 +145,7 @@ STATIC_ASSETS = {
     "schedules.js": JS,
     "service-log.js": JS,
     "dtmf.js": JS,
+    "audio.js": JS,
     "admin.js": JS,
     "login.js": JS,
 }
@@ -166,6 +167,12 @@ VALID_RADIO_MODES = {"tx", "rx", "idle", "unknown"}
 MAX_RADIO_EVENTS_PER_REQUEST = 100
 MAX_RADIO_VIEWERS_PER_NODE = 20
 RADIO_STREAM_KEEPALIVE_SECONDS = 15
+MAX_AUDIO_LISTENERS_PER_NODE = 10
+AUDIO_CHUNK_BYTES = 3200
+AUDIO_BACKLOG_CHUNKS = 100
+MAX_MIC_BUFFER_BYTES = 64 * 1024
+MAX_AUDIO_REQUEST_BYTES = 48 * 1024
+PTT_TIMEOUT_SECONDS = 1.5
 
 
 class RadioHub:
@@ -217,6 +224,94 @@ class RadioHub:
 
 RADIO_HUB = RadioHub()
 
+
+class AudioHub:
+    """In-memory relay of live node audio to browsers and browser microphone audio to nodes."""
+
+    def __init__(self):
+        self.condition = threading.Condition()
+        self.nodes = {}
+
+    def _node(self, node_id):
+        return self.nodes.setdefault(node_id, {
+            "seq": 0, "chunks": deque(maxlen=AUDIO_BACKLOG_CHUNKS), "listeners": 0,
+            "mic": bytearray(), "ptt_user": None, "ptt_seen": 0.0,
+        })
+
+    def add_audio(self, node_id, pcm):
+        pcm = bytes(pcm[: len(pcm) // 2 * 2])
+        with self.condition:
+            node = self._node(node_id)
+            for offset in range(0, len(pcm), AUDIO_CHUNK_BYTES):
+                node["seq"] += 1
+                node["chunks"].append((node["seq"], pcm[offset:offset + AUDIO_CHUNK_BYTES]))
+            self.condition.notify_all()
+
+    def subscribe(self, node_id):
+        with self.condition:
+            node = self._node(node_id)
+            if node["listeners"] >= MAX_AUDIO_LISTENERS_PER_NODE:
+                return None
+            node["listeners"] += 1
+            return node["seq"]
+
+    def unsubscribe(self, node_id):
+        with self.condition:
+            node = self._node(node_id)
+            node["listeners"] = max(0, node["listeners"] - 1)
+
+    def wait(self, node_id, after, timeout):
+        with self.condition:
+            node = self._node(node_id)
+            if node["seq"] <= after:
+                self.condition.wait(timeout)
+            return node["seq"], [data for seq, data in node["chunks"] if seq > after]
+
+    def _owner(self, node, now):
+        if node["ptt_user"] and now - node["ptt_seen"] > PTT_TIMEOUT_SECONDS:
+            node["ptt_user"] = None
+        return node["ptt_user"]
+
+    def wanted(self, node_id):
+        with self.condition:
+            node = self.nodes.get(node_id)
+            if node is None:
+                return False
+            return node["listeners"] > 0 or self._owner(node, time.monotonic()) is not None
+
+    def push_mic(self, node_id, user, ptt, pcm):
+        """Return (accepted, started, owner). ``started`` is true on a new transmission."""
+        now = time.monotonic()
+        with self.condition:
+            node = self._node(node_id)
+            owner = self._owner(node, now)
+            if owner not in (None, user):
+                return False, False, owner
+            if not ptt:
+                if owner == user:
+                    node["ptt_user"] = None
+                return True, False, None
+            node["ptt_user"] = user
+            node["ptt_seen"] = now
+            node["mic"].extend(pcm[: len(pcm) // 2 * 2])
+            del node["mic"][:-MAX_MIC_BUFFER_BYTES]
+            return True, owner is None, user
+
+    def take_for_agent(self, node_id):
+        """Return (flags, mic_pcm) for an agent audio exchange."""
+        now = time.monotonic()
+        with self.condition:
+            node = self.nodes.get(node_id)
+            if node is None:
+                return 0, b""
+            ptt = self._owner(node, now) is not None
+            mic = bytes(node["mic"])
+            node["mic"].clear()
+            wanted = node["listeners"] > 0 or ptt or bool(mic)
+            return (1 if wanted else 0) | (2 if ptt or mic else 0), mic
+
+
+AUDIO_HUB = AudioHub()
 
 class LiveLogStore:
     """In-memory ring buffer of streamed log lines per node."""
@@ -633,6 +728,27 @@ def optional_text(payload, key, limit):
     return value
 
 
+def validate_udp_audio(value):
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError("'udp_audio' måste vara ett JSON-objekt.")
+    flags = {}
+    for key in ("listen", "talk", "ptt"):
+        flag = value.get(key, False)
+        if type(flag) is not bool:
+            raise ValueError(f"'udp_audio.{key}' måste vara boolean.")
+        flags[key] = flag
+    issues = value.get("issues", [])
+    if (
+        not isinstance(issues, list)
+        or len(issues) > 5
+        or any(not isinstance(issue, str) or len(issue) > 256 for issue in issues)
+    ):
+        raise ValueError("'udp_audio.issues' måste vara en lista med högst 5 texter.")
+    return {**flags, "issues": issues, "error": optional_text(value, "error", 256) or ""}
+
+
 def validate_status_details(payload):
     monitor_tgs = payload.get("monitor_tgs", [])
     if (
@@ -663,6 +779,7 @@ def validate_status_details(payload):
         "monitor_tgs": monitor_tgs,
         "monitor_tgs_error": optional_text(payload, "monitor_tgs_error", 256),
         "pty_checks": clean_checks,
+        "udp_audio": validate_udp_audio(payload.get("udp_audio")),
         **counters,
     }
 
@@ -1840,6 +1957,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             self.send_json(200, {
                 "commands": claim_agent_commands(node_id),
                 "watch": RADIO_HUB.watched(node_id),
+                "audio": AUDIO_HUB.wanted(node_id),
             })
             return
         if path == "/login":
@@ -1966,6 +2084,13 @@ class PortalHandler(BaseHTTPRequestHandler):
                 "can_delete_nodes": self.role == "admin",
                 "role": self.role,
             })
+        elif path.startswith("/api/nodes/") and path.endswith("/audio"):
+            node_id = path[len("/api/nodes/"):-len("/audio")]
+            node = node_by_id(node_id) if node_id and "/" not in node_id else None
+            if node is None:
+                self.send_json(404, {"error": "Noden hittades inte."})
+            else:
+                self.stream_audio(node)
         elif path.startswith("/api/nodes/") and path.endswith("/radio-events"):
             node_id = path[len("/api/nodes/"):-len("/radio-events")]
             node = node_by_id(node_id) if node_id and "/" not in node_id else None
@@ -2034,6 +2159,49 @@ class PortalHandler(BaseHTTPRequestHandler):
                     self.wfile.flush()
         except (BrokenPipeError, ConnectionError, OSError):
             pass
+
+    def stream_audio(self, node):
+        node_id = node["id"]
+        if not ((node["status"] or {}).get("udp_audio") or {}).get("listen"):
+            self.send_json(409, {"error": "Noden har ingen UDP-ljudkälla konfigurerad."})
+            return
+        sequence = AUDIO_HUB.subscribe(node_id)
+        if sequence is None:
+            self.send_json(429, {"error": "För många samtidiga ljudlyssnare för noden."})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            while True:
+                new_sequence, chunks = AUDIO_HUB.wait(node_id, sequence, 5)
+                if chunks:
+                    sequence = new_sequence
+                    for data in chunks:
+                        self.wfile.write(len(data).to_bytes(2, "big") + data)
+                else:
+                    self.wfile.write(b"\x00\x00")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionError, OSError):
+            pass
+        finally:
+            AUDIO_HUB.unsubscribe(node_id)
+
+    def read_binary_body(self, max_bytes):
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise ValueError("Ogiltig Content-Length.") from exc
+        if content_length < 0 or content_length > max_bytes:
+            raise ValueError("Begäran är större än tillåtet.")
+        raw = self.rfile.read(content_length)
+        if len(raw) != content_length:
+            raise ValueError("Begäran är ofullständig.")
+        return raw
 
     def stream_radio_events(self, node):
         node_id = node["id"]
@@ -2465,6 +2633,64 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.send_json(404, {"error": "Konfigurationsåtgärden hittades inte."})
             else:
                 self.send_json(200, {"ok": True})
+            return
+
+        if path == "/api/v1/agent/audio":
+            node_id = self.authenticated_agent_id()
+            if node_id is None:
+                self.send_json(401, {"error": "Ogiltig nodautentisering."})
+                return
+            try:
+                pcm = self.read_binary_body(MAX_AUDIO_REQUEST_BYTES)
+            except ValueError as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            if pcm:
+                AUDIO_HUB.add_audio(node_id, pcm)
+            touch_node(node_id)
+            flags, mic = AUDIO_HUB.take_for_agent(node_id)
+            body = bytes([flags]) + mic
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if path.startswith("/api/nodes/") and path.endswith("/audio-mic"):
+            if not self.require_admin():
+                return
+            node_id = path[len("/api/nodes/"):-len("/audio-mic")]
+            node = node_by_id(node_id) if node_id and "/" not in node_id else None
+            if node is None:
+                self.send_json(404, {"error": "Noden hittades inte."})
+                return
+            if not ((node["status"] or {}).get("udp_audio") or {}).get("talk"):
+                self.send_json(409, {"error": "Noden har ingen UDP-ljudingång konfigurerad."})
+                return
+            if not node["online"]:
+                self.send_json(409, {"error": "Noden är offline."})
+                return
+            try:
+                body = self.read_binary_body(MAX_AUDIO_REQUEST_BYTES)
+            except ValueError as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            if not body:
+                self.send_json(400, {"error": "Begäran saknar innehåll."})
+                return
+            accepted, started, owner = AUDIO_HUB.push_mic(
+                node_id, self.actor, bool(body[0] & 1), body[1:]
+            )
+            if not accepted:
+                self.send_json(409, {"error": f"{owner} sänder redan via noden."})
+                return
+            if started:
+                with database() as connection:
+                    record_audit(connection, self.actor, "node.ptt", "Fjärrsändning startad",
+                                 node_id, node["name"])
+            self.send_json(200, {"ok": True})
             return
 
         if path == "/api/v1/agent/radio":

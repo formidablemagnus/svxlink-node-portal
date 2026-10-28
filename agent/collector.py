@@ -9,6 +9,7 @@ import threading
 import time
 from collections import deque
 
+from agent import audio
 from agent.version import read_version
 
 MAX_TAIL_BYTES = 256 * 1024
@@ -648,6 +649,7 @@ class Collector:
             "monitor_tgs": monitor_tgs,
             "monitor_tgs_error": monitor_error,
             "pty_checks": pty_checks,
+            "udp_audio": audio.describe(sections),
             "errors": sum(1 for line in lines if ERROR_RE.search(line)),
             "warnings": sum(1 for line in lines if WARNING_RE.search(line)),
             "events": sum(1 for line in lines if EVENT_RE.search(line)),

@@ -297,3 +297,6 @@ footer { padding: 0 3px; color: var(--muted); font-size: 12px; }
   th, td { padding: 10px 8px; }
   .node-details, .detail-meta { grid-template-columns: 1fr; }
 }
+
+.ptt-button.ptt-active { background: #c0392b; border-color: #c0392b; color: #fff; }
+.ptt-button { touch-action: none; user-select: none; }

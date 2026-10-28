@@ -240,6 +240,7 @@ function renderNode(node) {
   setText('monitor-tgs', Array.isArray(status.monitor_tgs) && status.monitor_tgs.length ? status.monitor_tgs.join(', ') : 'Inga');
   setText('pty-checks', (status.pty_checks || []).map((check) => check.reason).filter(Boolean).join(' '));
   setText('logic', status.logic || 'Okänd');
+  if (window.SvxAudio) window.SvxAudio.update(status.udp_audio, node.online);
   setText('callsign', status.callsign || 'Okänd');
   setText('service-status', SERVICE_LABELS[status.service_status] || status.service_status || 'Okänd');
   setText('last-seen', lastSeen);
