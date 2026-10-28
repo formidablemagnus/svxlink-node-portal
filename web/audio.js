@@ -9,6 +9,14 @@
   const connectButton = document.getElementById('audio-connect');
   const pttButton = document.getElementById('audio-ptt');
   const volume = document.getElementById('audio-volume');
+  const micGain = document.getElementById('audio-mic-gain');
+  try {
+    const saved = localStorage.getItem('svx-mic-gain');
+    if (saved !== null) micGain.value = saved;
+  } catch (error) { /* localStorage not available */ }
+  micGain.addEventListener('input', () => {
+    try { localStorage.setItem('svx-mic-gain', micGain.value); } catch (error) { /* ignore */ }
+  });
   const stateText = document.getElementById('audio-state');
   const errorText = document.getElementById('audio-error');
   let capabilities = {listen: false, talk: false, ptt: false, issues: [], error: '', mic_frames: 0};
@@ -146,7 +154,7 @@
       const end = Math.min(input.length, Math.max(start + 1, Math.floor((i + 1) * ratio)));
       let sum = 0;
       for (let j = start; j < end; j += 1) sum += input[j];
-      const value = Math.max(-1, Math.min(1, sum / (end - start)));
+      const value = Math.max(-1, Math.min(1, (sum / (end - start)) * Number(micGain.value)));
       output[i] = Math.round(value * 32767);
     }
     return output;
