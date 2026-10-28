@@ -438,6 +438,7 @@ class NodeAgent:
         )
         self.audio_lock = threading.Lock()
         self.status_wake = threading.Event()
+        self.bridge.on_activity = self.status_wake.set
         self.radio_wake = threading.Event()
         self.radio_lock = threading.Lock()
         self.radio_queue = deque(maxlen=500)
@@ -465,6 +466,7 @@ class NodeAgent:
             try:
                 status = self.collector.snapshot()
                 status["udp_audio"]["error"] = self.bridge.last_error[:256]
+                status["udp_audio"]["mic_frames"] = self.bridge.mic_frames
                 request_json(
                     self.status_url, payload={"node_id": self.node_id, **status},
                     headers=self.headers,

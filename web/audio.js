@@ -11,7 +11,19 @@
   const volume = document.getElementById('audio-volume');
   const stateText = document.getElementById('audio-state');
   const errorText = document.getElementById('audio-error');
-  let capabilities = {listen: false, talk: false, ptt: false, issues: [], error: ''};
+  let capabilities = {listen: false, talk: false, ptt: false, issues: [], error: '', mic_frames: 0};
+  const diagText = document.getElementById('audio-diag');
+  let peak = 0;
+  let sentBytes = 0;
+
+  function renderDiag() {
+    if (!capabilities.talk) { diagText.textContent = ''; return; }
+    const level = Math.round(peak * 100);
+    peak = 0;
+    diagText.textContent = `Mikrofon: nivå ${level}%, skickat ${Math.round(sentBytes / 1024)} kB till portalen, `
+      + `${capabilities.mic_frames || 0} ljudramar levererade till SvxLink.`;
+  }
+  setInterval(renderDiag, 1000);
   let nodeOnline = false;
   let connected = false;
   let abort = null;
@@ -157,6 +169,7 @@
           setError(data.error || `Sändningen avvisades (HTTP ${response.status}).`);
           pttHeld = false;
           pttSending = false;
+          setState(connected ? 'Lyssnar' : 'Frånkopplad');
           render();
         }
       } catch (error) {
@@ -186,7 +199,11 @@
     silent.gain.value = 0;
     processor.onaudioprocess = (event) => {
       if (!pttSending) return;
-      post(1, downsample(event.inputBuffer.getChannelData(0), micContext.sampleRate));
+      const input = event.inputBuffer.getChannelData(0);
+      for (let i = 0; i < input.length; i += 1) peak = Math.max(peak, Math.abs(input[i]));
+      const pcm = downsample(input, micContext.sampleRate);
+      sentBytes += pcm.byteLength;
+      post(1, pcm);
     };
     source.connect(processor);
     processor.connect(silent);

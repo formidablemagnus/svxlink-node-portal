@@ -244,6 +244,8 @@ class AudioBridge:
         self.read_sections = read_sections
         self.channels = channels
         self.last_error = ""
+        self.mic_frames = 0
+        self.on_activity = None
         self.running = threading.Event()
 
     def _start_sockets(self, config):
@@ -377,6 +379,9 @@ class AudioBridge:
                             if len(frame) < frame_bytes:
                                 frame += bytes(frame_bytes - len(frame))
                             self._push(frames, frame)
+                            self.mic_frames += 1
+                            if self.on_activity and self.mic_frames % 25 == 1:
+                                self.on_activity()
                     self._safe_ptt(ptt, True)
                 elif ptt:
                     deadline = time.monotonic() + PTT_DRAIN_SECONDS

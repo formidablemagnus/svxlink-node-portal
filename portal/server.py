@@ -746,7 +746,11 @@ def validate_udp_audio(value):
         or any(not isinstance(issue, str) or len(issue) > 256 for issue in issues)
     ):
         raise ValueError("'udp_audio.issues' måste vara en lista med högst 5 texter.")
-    return {**flags, "issues": issues, "error": optional_text(value, "error", 256) or ""}
+    mic_frames = value.get("mic_frames", 0)
+    if type(mic_frames) is not int or not 0 <= mic_frames <= 10**12:
+        raise ValueError("'udp_audio.mic_frames' måste vara ett heltal.")
+    return {**flags, "issues": issues, "mic_frames": mic_frames,
+            "error": optional_text(value, "error", 256) or ""}
 
 
 def validate_status_details(payload):
