@@ -160,11 +160,24 @@
     return output;
   }
 
+  // Samlar ~100 ms per anrop så att proxyn och nätet inte får 23 anrop i sekunden.
+  let micPending = [];
+  let micPendingBytes = 0;
+  function flushMic() {
+    if (!micPendingBytes) return;
+    const merged = new Int16Array(micPendingBytes / 2);
+    let offset = 0;
+    micPending.forEach((part) => { merged.set(part, offset); offset += part.length; });
+    micPending = [];
+    micPendingBytes = 0;
+    post(1, merged);
+  }
+
   function post(flag, pcm) {
     const body = new Uint8Array(1 + (pcm ? pcm.byteLength : 0));
     body[0] = flag;
     if (pcm) body.set(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength), 1);
-    if (pendingSends > 6 && flag) return;
+    if (pendingSends > 20 && flag) return;
     pendingSends += 1;
     sendChain = sendChain.then(async () => {
       try {
@@ -211,7 +224,9 @@
       for (let i = 0; i < input.length; i += 1) peak = Math.max(peak, Math.abs(input[i]));
       const pcm = downsample(input, micContext.sampleRate);
       sentBytes += pcm.byteLength;
-      post(1, pcm);
+      micPending.push(pcm);
+      micPendingBytes += pcm.byteLength;
+      if (micPendingBytes >= 3200) flushMic();
     };
     source.connect(processor);
     processor.connect(silent);
@@ -255,6 +270,7 @@
     pttHeld = false;
     pttSending = false;
     if (wasSending) {
+      flushMic();
       post(0, null);
       setState(connected ? 'Lyssnar' : 'Frånkopplad');
     }
