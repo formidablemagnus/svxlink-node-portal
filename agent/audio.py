@@ -25,6 +25,7 @@ MAX_CONSECUTIVE_FAILURES = 5
 MAX_PTT_SECONDS = 180
 PTT_DRAIN_SECONDS = 0.3
 UPLINK_QUEUE_FRAMES = 25
+UPLINK_SILENCE_TAIL_SECONDS = 4.0
 SQUELCH_OPEN = b"O"
 SQUELCH_CLOSE = b"Z"
 LOCAL_FALLBACK_HOST = "127.0.0.1"
@@ -298,14 +299,23 @@ class AudioBridge:
                 size += len(wire)
         return b"".join(chunks)
 
-    def _uplink_sender(self, sender, address, frames, stop):
+    def _uplink_sender(self, sender, address, frames, stop, silence=b""):
+        # SvxLinks VOX stänger bara när det kommer tystnad; utan paket står
+        # ljudenheten still och squelchen blir kvar öppen. Därför skickas
+        # tystnad en stund efter sista mikrofonramen.
         next_time = time.monotonic()
+        last_real = 0.0
         while not stop.is_set():
             try:
-                frame = frames.get(timeout=0.1)
+                frame = frames.get(timeout=0.005 if silence else 0.1)
+                last_real = time.monotonic()
             except queue.Empty:
-                next_time = time.monotonic()
-                continue
+                now = time.monotonic()
+                if silence and last_real and now - last_real < UPLINK_SILENCE_TAIL_SECONDS:
+                    frame = silence
+                else:
+                    next_time = now
+                    continue
             now = time.monotonic()
             if next_time > now:
                 time.sleep(next_time - now)
@@ -341,18 +351,18 @@ class AudioBridge:
         frames = queue.Queue(maxsize=UPLINK_QUEUE_FRAMES)
         stop = threading.Event()
         thread = None
+        rx_channels = (self.channels or rx["channels"]) if rx else UDP_CHANNELS
+        frame_bytes = (rx["rate"] * FRAME_MS // 1000 * rx_channels * 2) if rx else 0
         if rx:
             host = rx["host"]
             if host in ("", "0.0.0.0"):
                 host = LOCAL_FALLBACK_HOST
             thread = threading.Thread(
                 target=self._uplink_sender,
-                args=(sender, (host, rx["port"]), frames, stop),
+                args=(sender, (host, rx["port"]), frames, stop, bytes(frame_bytes)),
                 name="audio-uplink", daemon=True,
             )
             thread.start()
-        rx_channels = (self.channels or rx["channels"]) if rx else UDP_CHANNELS
-        frame_bytes = (rx["rate"] * FRAME_MS // 1000 * rx_channels * 2) if rx else 0
         failures = 0
         logging.info("Ljudbrygga startad.")
         try:
