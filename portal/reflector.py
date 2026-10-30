@@ -9,7 +9,7 @@ import uuid
 
 DEFAULT_STREAM_URLS = (
     "https://svxreflector-fernebo.sk3w.se/api/stream,"
-    "https://svxreflector-kista.sk3w.se/api/stream"
+    "https://reflector-sm.svxlink.org/api/stream"
 )
 # Kommaseparerad lista; varje reflektor har en egen nodmängd som summeras.
 REFLECTOR_STREAM_URLS = [
