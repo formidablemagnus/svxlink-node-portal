@@ -1,3 +1,4 @@
+'use strict';
 const pathParts = window.location.pathname.split('/').filter(Boolean);
 const nodeId = pathParts[pathParts.length - 2];
 const $ = (id) => document.getElementById(id);
@@ -179,6 +180,7 @@ async function enqueueCommand(command) {
   throw new Error('Begäran tog för lång tid. Kontrollera nodens agentlogg.');
 }
 
+/** @returns {Promise<void>} */
 async function loadSchedules() {
   if (dirty && !window.confirm('Läs om crontab och kasta osparade ändringar?')) return;
   $('reload-schedules').disabled = true;

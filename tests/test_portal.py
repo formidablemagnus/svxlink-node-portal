@@ -1403,8 +1403,9 @@ class PortalUserAndAuditTests(unittest.TestCase):
                 self.assertEqual(status(*admin, node_path, {"password": "wrong-password"}, "DELETE"), 403)
                 with database() as connection:
                     connection.execute(
-                        "UPDATE nodes SET last_seen = ? WHERE id = ?",
-                        (datetime.now(timezone.utc).isoformat(), node["node_id"]),
+                        "UPDATE nodes SET last_seen = ?, status_json = ? WHERE id = ?",
+                        (datetime.now(timezone.utc).isoformat(),
+                         json.dumps({"active": True}), node["node_id"]),
                     )
                 queued = call(*operator, f"/api/nodes/{node['node_id']}/dtmf-commands",
                               {"sequence": "91240#"})

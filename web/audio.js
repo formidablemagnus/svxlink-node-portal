@@ -1,3 +1,4 @@
+'use strict';
 (() => {
   const WIRE_RATE = 16000;
   const MAX_BUFFERED_SECONDS = 0.6;
@@ -303,6 +304,7 @@
   window.addEventListener('pagehide', () => { releasePtt(); disconnect(); });
 
   window.SvxAudio = {
+    /** @param {Object|null} udpAudio @param {boolean} online @returns {void} */
     update(udpAudio, online) {
       capabilities = {...capabilities, ...(udpAudio || {})};
       nodeOnline = Boolean(online);

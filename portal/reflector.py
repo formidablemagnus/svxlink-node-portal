@@ -1,5 +1,10 @@
 """Live reflector status stream shared by all browser viewers."""
+from __future__ import annotations
+
 import json
+from urllib.parse import urlsplit
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 import logging
 import os
 import threading
@@ -7,23 +12,30 @@ import time
 import urllib.request
 import uuid
 
-DEFAULT_STREAM_URLS = (
+DEFAULT_STREAM_URLS: str = (
     "https://svxreflector-fernebo.sk3w.se/api/stream,"
     "https://reflector-sm.svxlink.org/api/stream"
 )
 # Kommaseparerad lista; varje reflektor har en egen nodmängd som summeras.
-REFLECTOR_STREAM_URLS = [
-    url.strip()
+def _validate_stream_url(url: str) -> str:
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        raise ValueError("Invalid reflector stream URL; expected HTTP or HTTPS.")
+    return url
+
+
+REFLECTOR_STREAM_URLS: list[str] = [
+    _validate_stream_url(url.strip())
     for url in os.environ.get("SVXLINK_REFLECTOR_STREAM_URL", DEFAULT_STREAM_URLS).split(",")
     if url.strip()
 ]
-MAX_SSE_BYTES = 5 * 1024 * 1024
+MAX_SSE_BYTES: int = 5 * 1024 * 1024
 
 
-def summarize_nodes(nodes):
+def summarize_nodes(nodes: Any) -> dict[str, Any]:
     if not isinstance(nodes, dict):
         raise ValueError("Reflektorströmmen saknar ett giltigt nodes-objekt.")
-    by_tg = {}
+    by_tg: dict[int, dict[str, int]] = {}
     visible = 0
     for node in nodes.values():
         if not isinstance(node, dict) or node.get("hidden", False):
@@ -43,7 +55,7 @@ def summarize_nodes(nodes):
     return {"node_count": visible, "talkgroups": groups}
 
 
-def _parent(document, pointer):
+def _parent(document: Any, pointer: Any) -> tuple[Any, str]:
     if not isinstance(pointer, str) or not pointer.startswith("/"):
         raise ValueError("Ogiltig JSON Pointer i reflektorströmmen.")
     parts = [p.replace("~1", "/").replace("~0", "~") for p in pointer[1:].split("/")]
@@ -58,7 +70,7 @@ def _parent(document, pointer):
     return parent, parts[-1]
 
 
-def apply_patch(document, operations):
+def apply_patch(document: Any, operations: Any) -> Any:
     if not isinstance(operations, list):
         raise ValueError("Reflektorströmmen innehåller en ogiltig patch.")
     for op in operations:
@@ -83,9 +95,9 @@ def apply_patch(document, operations):
     return document
 
 
-def merge_states(states):
+def merge_states(states: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Sum node counts and talkgroups from several reflector sources."""
-    groups = {}
+    groups: dict[int, dict[str, int]] = {}
     for state in states:
         for group in state["talkgroups"]:
             entry = groups.setdefault(group["tg"], {"tg": group["tg"], "nodes": 0, "talkers": 0})
@@ -108,15 +120,15 @@ def merge_states(states):
 class ReflectorHub:
     """Aggregates the live status of every configured reflector."""
 
-    def __init__(self, urls=None, source_factory=None):
+    def __init__(self, urls: Sequence[str] | None=None, source_factory: Callable[[str, Callable[[], None]], ReflectorSource] | None=None) -> None:
         self.condition = threading.Condition()
-        self.sequence = 0
-        self.started = False
+        self.sequence: int = 0
+        self.started: bool = False
         factory = source_factory or ReflectorSource
-        self.sources = [factory(url, self._on_change) for url in (urls or REFLECTOR_STREAM_URLS)]
-        self.state = merge_states([source.state for source in self.sources])
+        self.sources: list[ReflectorSource] = [factory(_validate_stream_url(url), self._on_change) for url in (urls or REFLECTOR_STREAM_URLS)]
+        self.state: dict[str, Any] = merge_states([source.state for source in self.sources])
 
-    def ensure_started(self):
+    def ensure_started(self) -> None:
         with self.condition:
             if self.started:
                 return
@@ -124,16 +136,20 @@ class ReflectorHub:
         for source in self.sources:
             source.start()
 
-    def snapshot(self):
+    def snapshot(self) -> tuple[int, dict[str, Any]]:
         with self.condition:
             return self.sequence, self.state
 
-    def wait(self, after, timeout):
+    def wait(self, after: int, timeout: float | None) -> tuple[int, dict[str, Any]]:
         with self.condition:
             self.condition.wait_for(lambda: self.sequence > after, timeout=timeout)
             return self.sequence, self.state
 
-    def _on_change(self):
+    def close(self) -> None:
+        for source in self.sources:
+            source.close()
+
+    def _on_change(self) -> None:
         with self.condition:
             state = merge_states([source.state for source in self.sources])
             if state == self.state:
@@ -144,10 +160,12 @@ class ReflectorHub:
 
 
 class ReflectorSource:
-    def __init__(self, url, on_change):
-        self.url = url
+    def __init__(self, url: str, on_change: Callable[[], None]) -> None:
+        self.url = _validate_stream_url(url)
         self.on_change = on_change
-        self.state = {
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.state: dict[str, Any] = {
             "ok": False,
             "connected": False,
             "error": "Ansluter till reflektorströmmen.",
@@ -155,19 +173,27 @@ class ReflectorSource:
             "talkgroups": [],
             "updated_at": None,
         }
-        self.document = {}
-        self.generation = None
+        self.document: dict[str, Any] = {}
+        self.generation: Any = None
 
-    def start(self):
-        threading.Thread(target=self._loop, name="reflector-reader", daemon=True).start()
+    def start(self) -> None:
+        if self.thread is None or not self.thread.is_alive():
+            self.stop_event.clear()
+            self.thread = threading.Thread(target=self._loop, name="reflector-reader", daemon=True)
+            self.thread.start()
 
-    def _publish(self, state):
+    def close(self) -> None:
+        self.stop_event.set()
+        if self.thread is not None and self.thread is not threading.current_thread():
+            self.thread.join(timeout=2.0)
+
+    def _publish(self, state: dict[str, Any]) -> None:
         if state == self.state:
             return
         self.state = state
         self.on_change()
 
-    def _handle(self, event_name, payload):
+    def _handle(self, event_name: str, payload: Any) -> None:
         if not isinstance(payload, dict) or payload.get("topic") != "status":
             return
         current = self.state
@@ -190,6 +216,8 @@ class ReflectorSource:
         self.generation = generation
         try:
             apply_patch(self.document, payload.get("patch"))
+            if len(json.dumps(self.document, separators=(",", ":")).encode("utf-8")) > MAX_SSE_BYTES:
+                raise ValueError("Reflector status exceeded the size limit.")
             summary = summarize_nodes(self.document.get("nodes"))
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             logging.warning("Ogiltig statuspatch från reflektorn: %s", exc)
@@ -203,15 +231,15 @@ class ReflectorSource:
             "updated_at": payload.get("ts"),
         })
 
-    def _loop(self):
+    def _loop(self) -> None:
         retry_delay = 1
-        while True:
+        while not self.stop_event.is_set():
             self.document = {}
             self.generation = None
             body = json.dumps(
                 {"id": str(uuid.uuid4()), "seq": 1, "topics": {"status": 1}}, separators=(",", ":")
             ).encode("utf-8")
-            request = urllib.request.Request(
+            request = urllib.request.Request(  # noqa: S310 - URL validated at configuration load
                 self.url,
                 data=body,
                 headers={
@@ -225,11 +253,16 @@ class ReflectorSource:
             )
             opened_at = None
             try:
-                with urllib.request.urlopen(request, timeout=45) as response:
+                opener = urllib.request.build_opener(
+                    urllib.request.HTTPHandler(), urllib.request.HTTPSHandler()
+                )
+                with opener.open(request, timeout=45) as response:
                     if response.status != 200 or "text/event-stream" not in response.headers.get("Content-Type", "").lower():
                         raise RuntimeError("Reflektorströmmen returnerade ett oväntat svar.")
                     opened_at = time.monotonic()
-                    event_name, data_lines, size = "message", [], 0
+                    event_name: str = "message"
+                    data_lines: list[str] = []
+                    size = 0
                     while True:
                         raw = response.readline(MAX_SSE_BYTES + 1)
                         if not raw:
@@ -259,7 +292,8 @@ class ReflectorSource:
                     "connected": False,
                     "error": f"Reflektorströmmen är tillfälligt otillgänglig: {exc}",
                 })
-                time.sleep(retry_delay)
+                if self.stop_event.wait(retry_delay):
+                    break
                 retry_delay = min(retry_delay * 2, 30)
 
 

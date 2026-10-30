@@ -1,44 +1,50 @@
 #!/usr/bin/env python3
 """Restricted privileged reader/writer for SvxLink node configuration files."""
+from __future__ import annotations
+
 import hashlib
+import hmac
 import json
 import os
 import re
 import stat
 import sys
 import tempfile
+from contextlib import suppress
 from datetime import datetime
+from typing import NoReturn
 
-CONFIG_PATHS = {
+CONFIG_PATHS: dict[str, str] = {
     "svxlink.conf": "/etc/svxlink/svxlink.conf",
     "node_info.json": "/etc/svxlink/node_info.json",
 }
-MAX_CONFIG_BYTES = 2 * 1024 * 1024
+MAX_CONFIG_BYTES: int = 2 * 1024 * 1024
 
 
-def respond(data, status=0):
+def respond(data: object, status: int = 0) -> int:
     sys.stdout.write(json.dumps(data, ensure_ascii=False) + "\n")
     return status
 
 
-def reject_json_constant(value):
+def reject_json_constant(value: str) -> NoReturn:
     raise ValueError(f"Ogiltigt JSON-konstantvärde: {value}.")
 
 
-def validate_document(document):
+def validate_document(document: str) -> str:
     if document not in CONFIG_PATHS:
         raise ValueError("Endast svxlink.conf och node_info.json kan ändras.")
     return CONFIG_PATHS[document]
 
 
-def read_regular_file(path, document):
+def read_regular_file(path: str, document: str) -> tuple[bytes, os.stat_result]:
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    file_descriptor = os.open(path, flags)
+    descriptor = os.open(path, flags)
+    file_descriptor: int | None = descriptor
     try:
-        file_stat = os.fstat(file_descriptor)
+        file_stat = os.fstat(descriptor)
         if not stat.S_ISREG(file_stat.st_mode):
             raise ValueError(f"{document} måste vara en vanlig fil, inte en länk.")
-        with os.fdopen(file_descriptor, "rb") as config_file:
+        with os.fdopen(descriptor, "rb") as config_file:
             file_descriptor = None
             content = config_file.read(MAX_CONFIG_BYTES + 1)
     finally:
@@ -49,7 +55,7 @@ def read_regular_file(path, document):
     return content, file_stat
 
 
-def read_document(document):
+def read_document(document: str) -> dict[str, bool | str]:
     path = validate_document(document)
     content, _ = read_regular_file(path, document)
     decoded = content.decode("utf-8")
@@ -61,7 +67,7 @@ def read_document(document):
     }
 
 
-def validate_json_document(content):
+def validate_json_document(content: str) -> None:
     try:
         json.loads(content, parse_constant=reject_json_constant)
     except json.JSONDecodeError as exc:
@@ -70,7 +76,7 @@ def validate_json_document(content):
         ) from exc
 
 
-def write_document(document, content, expected_sha256):
+def write_document(document: str, content: str, expected_sha256: str) -> dict[str, bool | str]:
     path = validate_document(document)
     if not isinstance(content, str):
         raise ValueError(f"{document} måste vara text.")
@@ -87,7 +93,7 @@ def write_document(document, content, expected_sha256):
         validate_json_document(content)
 
     original, file_stat = read_regular_file(path, document)
-    if hashlib.sha256(original).hexdigest() != expected_sha256:
+    if not hmac.compare_digest(hashlib.sha256(original).hexdigest(), expected_sha256):
         raise ValueError(f"{document} har ändrats sedan den lästes. Läs om den innan du sparar.")
 
     directory = os.path.dirname(path)
@@ -100,7 +106,7 @@ def write_document(document, content, expected_sha256):
             backup_file.flush()
             os.fsync(backup_file.fileno())
         if os.name == "posix":
-            os.chown(backup_path, file_stat.st_uid, file_stat.st_gid)
+            os.__dict__["chown"](backup_path, file_stat.st_uid, file_stat.st_gid)
         os.chmod(backup_path, stat.S_IMODE(file_stat.st_mode))
     except Exception:
         os.unlink(backup_path)
@@ -113,10 +119,10 @@ def write_document(document, content, expected_sha256):
             temp_file.flush()
             os.fsync(temp_file.fileno())
         if os.name == "posix":
-            os.chown(temp_path, file_stat.st_uid, file_stat.st_gid)
+            os.__dict__["chown"](temp_path, file_stat.st_uid, file_stat.st_gid)
         os.chmod(temp_path, stat.S_IMODE(file_stat.st_mode))
         latest, _ = read_regular_file(path, document)
-        if hashlib.sha256(latest).hexdigest() != expected_sha256:
+        if not hmac.compare_digest(hashlib.sha256(latest).hexdigest(), expected_sha256):
             raise ValueError(f"{document} ändrades under sparningen. Läs om den innan du försöker igen.")
         os.replace(temp_path, path)
         if os.name == "posix":
@@ -126,10 +132,8 @@ def write_document(document, content, expected_sha256):
             finally:
                 os.close(directory_fd)
     except Exception:
-        try:
+        with suppress(FileNotFoundError):
             os.unlink(temp_path)
-        except FileNotFoundError:
-            pass
         raise
 
     return {
@@ -140,8 +144,8 @@ def write_document(document, content, expected_sha256):
     }
 
 
-def main():
-    if os.geteuid() != 0:
+def main() -> int:
+    if os.__dict__["geteuid"]() != 0:
         return respond({"ok": False, "error": "Hjälpprogrammet måste köras via sudo."}, 1)
     if len(sys.argv) != 1:
         return respond({"ok": False, "error": "Argument är inte tillåtna."}, 2)
@@ -154,6 +158,8 @@ def main():
             raise ValueError("Begäran måste vara ett JSON-objekt.")
         action = request.get("action")
         document = request.get("document")
+        if not isinstance(document, str):
+            raise ValueError("Ogiltig konfigurationsåtgärd.")
         if action == "read" and set(request) == {"action", "document"}:
             return respond(read_document(document))
         if action == "write" and set(request) == {

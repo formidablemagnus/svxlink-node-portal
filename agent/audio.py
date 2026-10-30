@@ -5,6 +5,8 @@ När sådana enheter finns i svxlink.conf kan portalen lyssna på noden och sän
 via den. Ljudet går över portalens HTTP-anslutning som 16 kHz mono PCM16.
 PTT styrs via SvxLinks squelch-PTY (``SQL_DET=PTY`` och ``SQL_PTY``).
 """
+from __future__ import annotations
+
 import array
 import hashlib
 import hmac
@@ -17,6 +19,9 @@ import struct
 import sys
 import threading
 import time
+from contextlib import suppress
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 WIRE_RATE = 16000
 FRAME_MS = 20
@@ -25,8 +30,9 @@ DEFAULT_CARD_RATE = 16000
 UDP_CHANNELS = 2
 MAX_PAYLOAD_BYTES = 48 * 1024
 EXCHANGE_SECONDS = 0.04
-UDP_EXCHANGE_SECONDS = 0.02
+UDP_EXCHANGE_SECONDS: float = 0.02
 MAX_CONSECUTIVE_FAILURES = 5
+MAX_REPLY_DATAGRAMS = 4
 MAX_PTT_SECONDS = 180
 PTT_DRAIN_SECONDS = 0.3
 UPLINK_QUEUE_FRAMES = 40
@@ -38,11 +44,11 @@ SQUELCH_CLOSE = b"Z"
 LOCAL_FALLBACK_HOST = "127.0.0.1"
 
 
-def _unquote(value):
+def _unquote(value: str) -> str:
     return value.strip().strip("\"'")
 
 
-def parse_udp_device(value):
+def parse_udp_device(value: str) -> tuple[str, int] | None:
     """Return (host, port) for an ``udp:`` AUDIO_DEV value, otherwise None."""
     value = _unquote(value or "")
     if not value.lower().startswith("udp:"):
@@ -62,8 +68,8 @@ def parse_udp_device(value):
     return host, port
 
 
-def _expand(sections, names, member_key):
-    result = []
+def _expand(sections: Mapping[str, Mapping[str, str]], names: Sequence[str], member_key: str) -> list[str]:
+    result: list[str] = []
     for name in names:
         section = sections.get(name, {})
         members = section.get(member_key)
@@ -74,7 +80,7 @@ def _expand(sections, names, member_key):
     return result
 
 
-def _card_setting(sections, section, key, default, low, high):
+def _card_setting(sections: Mapping[str, Mapping[str, str]], section: Mapping[str, str], key: str, default: int, low: int, high: int) -> int:
     for source in (section, sections.get("GLOBAL", {})):
         try:
             value = int(_unquote(source.get(key, "")))
@@ -85,15 +91,15 @@ def _card_setting(sections, section, key, default, low, high):
     return default
 
 
-def _card_rate(sections, section):
+def _card_rate(sections: Mapping[str, Mapping[str, str]], section: Mapping[str, str]) -> int:
     return _card_setting(sections, section, "CARD_SAMPLE_RATE", DEFAULT_CARD_RATE, 8000, 96000)
 
 
-def _card_channels(sections, section):
+def _card_channels(sections: Mapping[str, Mapping[str, str]], section: Mapping[str, str]) -> int:
     return _card_setting(sections, section, "CARD_CHANNELS", UDP_CHANNELS, 1, 2)
 
 
-def find_udp_audio(sections):
+def find_udp_audio(sections: Mapping[str, Mapping[str, str]]) -> dict[str, Any]:
     """Find the UDP audio devices used by the active logics in svxlink.conf."""
     rx_names, tx_names = [], []
     logic_names = [
@@ -110,7 +116,7 @@ def find_udp_audio(sections):
         if logic.get("TX"):
             tx_names.append(_unquote(logic["TX"]))
 
-    def first_udp(names, member_key):
+    def first_udp(names: Sequence[str], member_key: str) -> tuple[str, Mapping[str, str], tuple[str, int]] | None:
         for name in _expand(sections, names, member_key):
             section = sections.get(name, {})
             target = parse_udp_device(section.get("AUDIO_DEV", ""))
@@ -118,7 +124,7 @@ def find_udp_audio(sections):
                 return name, section, target
         return None
 
-    config = {"rx": None, "tx": None, "ptt_path": "", "issues": []}
+    config: dict[str, Any] = {"rx": None, "tx": None, "ptt_path": "", "issues": []}
     rx = first_udp(rx_names, "RECEIVERS")
     if rx:
         name, section, (host, port) = rx
@@ -138,7 +144,7 @@ def find_udp_audio(sections):
     return config
 
 
-def describe(sections):
+def describe(sections: Mapping[str, Mapping[str, str]]) -> dict[str, Any]:
     """Capabilities reported to the portal in the status payload."""
     config = find_udp_audio(sections)
     return {
@@ -153,7 +159,7 @@ def describe(sections):
     }
 
 
-def _read_samples(data, channels):
+def _read_samples(data: bytes, channels: int) -> array.array[int]:
     width = 2 * channels
     samples = array.array("h")
     samples.frombytes(bytes(data[: len(data) // width * width]))
@@ -162,12 +168,12 @@ def _read_samples(data, channels):
     return samples
 
 
-def _resample(samples, source_rate, target_rate):
+def _resample(samples: array.array[int], source_rate: int, target_rate: int) -> array.array[int]:
     if source_rate == target_rate or not samples:
         return samples
     if source_rate % target_rate == 0:
         factor = source_rate // target_rate
-        groups = zip(*(samples[offset::factor] for offset in range(factor)))
+        groups = zip(*(samples[offset::factor] for offset in range(factor)), strict=False)
         return array.array("h", [sum(group) // factor for group in groups])
     last = len(samples) - 1
     step = source_rate / target_rate
@@ -182,7 +188,7 @@ def _resample(samples, source_rate, target_rate):
     return output
 
 
-def node_to_wire(data, channels, rate):
+def node_to_wire(data: bytes, channels: int, rate: int) -> bytes:
     mono = _read_samples(data, channels)[0::channels]
     wire = _resample(mono, rate, WIRE_RATE)
     if sys.byteorder == "big":
@@ -190,7 +196,7 @@ def node_to_wire(data, channels, rate):
     return wire.tobytes()
 
 
-def wire_to_node(data, channels, rate):
+def wire_to_node(data: bytes, channels: int, rate: int) -> bytes:
     mono = _read_samples(data, 1)
     resampled = _resample(mono, WIRE_RATE, rate)
     if channels > 1:
@@ -206,13 +212,13 @@ def wire_to_node(data, channels, rate):
 class PttControl:
     """Opens and closes SvxLink's squelch through its PTY."""
 
-    def __init__(self, path):
+    def __init__(self, path: str) -> None:
         self.path = path
         self.active = False
         self.started = 0.0
         self.blocked = False
 
-    def _write(self, command):
+    def _write(self, command: bytes) -> None:
         descriptor = os.open(self.path, os.O_WRONLY | getattr(os, "O_NONBLOCK", 0))
         try:
             mode = os.fstat(descriptor).st_mode
@@ -222,7 +228,7 @@ class PttControl:
         finally:
             os.close(descriptor)
 
-    def set(self, wanted):
+    def set(self, wanted: bool) -> None:
         if not self.path:
             return
         if wanted and self.active and time.monotonic() - self.started > MAX_PTT_SECONDS:
@@ -238,7 +244,7 @@ class PttControl:
         elif not wanted and self.active:
             self.release()
 
-    def release(self):
+    def release(self) -> None:
         if not self.active:
             return
         self.active = False
@@ -257,23 +263,24 @@ class UdpExchange:
     MAX_REPLY_BYTES = 4096
     HOLD_TIMEOUTS = 50
 
-    def __init__(self, node_id, token, address):
+    def __init__(self, node_id: str, token: str, address: tuple[str, int]) -> None:
         self.node_id = node_id.encode("ascii")
         self.key = hashlib.sha256(token.encode("utf-8")).hexdigest().encode("ascii")
         self.address = address
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.settimeout(self.REPLY_TIMEOUT)
         self.seq = 0
         self.last_flags = 0
         self.timeouts = 0
         self.answered = False
 
-    def close(self):
+    def close(self) -> None:
         self.sock.close()
 
-    def _mac(self, direction, head, body):
+    def _mac(self, direction: bytes, head: bytes, body: bytes) -> bytes:
         return hmac.new(self.key, direction + head + body, hashlib.sha256).digest()[:self.MAC_BYTES]
 
-    def exchange(self, payload):
+    def exchange(self, payload: bytes) -> bytes | None:
         """Return the portal reply, ``b""`` style flags on a lost reply, or None when unreachable."""
         self.seq += 1
         ts = int(time.time())
@@ -284,17 +291,17 @@ class UdpExchange:
         try:
             self.sock.sendto(packet, self.address)
             deadline = time.monotonic() + self.REPLY_TIMEOUT
-            parts = []
+            parts: list[bytes] = []
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     if parts:
                         break
-                    raise socket.timeout()
+                    raise TimeoutError()
                 self.sock.settimeout(remaining)
                 try:
                     data, _ = self.sock.recvfrom(self.MAX_REPLY_BYTES)
-                except socket.timeout:
+                except TimeoutError:
                     if parts:
                         break
                     raise
@@ -306,13 +313,15 @@ class UdpExchange:
                 if not body or not hmac.compare_digest(mac, self._mac(b"R", expected, body)):
                     continue
                 parts.append(body)
+                if len(parts) >= MAX_REPLY_DATAGRAMS and body[0] & 4:
+                    return None
                 if not body[0] & 4:
                     break
             self.timeouts = 0
             self.answered = True
             self.last_flags = parts[0][0] & 3
             return bytes([self.last_flags]) + b"".join(part[1:] for part in parts)
-        except socket.timeout:
+        except TimeoutError:
             self.timeouts += 1
         except OSError as exc:
             logging.debug("UDP-ljudutbyte misslyckades: %s", exc)
@@ -324,41 +333,49 @@ class UdpExchange:
 
 
 class AudioBridge:
-    def __init__(self, config_path, read_sections, channels=None):
+    def __init__(self, config_path: str, read_sections: Callable[[str], Mapping[str, Mapping[str, str]]], channels: int | None=None) -> None:
         self.config_path = config_path
         self.read_sections = read_sections
         self.channels = channels
         self.exchange_seconds = EXCHANGE_SECONDS
         self.last_error = ""
         self.mic_frames = 0
-        self.on_activity = None
+        self.on_activity: Callable[[], None] | None = None
         self.running = threading.Event()
 
-    def _start_sockets(self, config):
+    def _start_sockets(self, config: Mapping[str, Any]) -> tuple[socket.socket | None, socket.socket | None]:
         listener = None
         sender = None
         try:
             tx = config["tx"]
             if tx:
                 listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                bind_host = tx["host"]
+                if not isinstance(bind_host, str) or not isinstance(tx["port"], int) or not 1 <= tx["port"] <= 65535:
+                    raise ValueError("Invalid local UDP audio address.")
+                # Empty AUDIO_DEV host intentionally binds all interfaces; set a host to restrict the listener.
                 try:
-                    listener.bind((tx["host"] or "0.0.0.0", tx["port"]))
+                    bind_address = socket.getaddrinfo(
+                        bind_host, tx["port"], socket.AF_INET, socket.SOCK_DGRAM, 0, socket.AI_PASSIVE
+                    )[0][4]
+                    listener.bind(bind_address)
                 except OSError as exc:
                     raise OSError(
-                        f"Kan inte ta emot ljud på UDP {tx['host'] or '0.0.0.0'}:{tx['port']} "
+                        f"Kan inte ta emot ljud på UDP {tx['host'] or socket.inet_ntoa(bytes(4))}:{tx['port']} "
                         f"från [{tx['name']}]. Ange en lokal adress, till exempel "
                         f"udp:{LOCAL_FALLBACK_HOST}:{tx['port']}. ({exc})"
                     ) from exc
             if config["rx"]:
                 sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        except OSError:
+                sender.settimeout(1.0)
+        except BaseException:
             for sock in (listener, sender):
                 if sock:
                     sock.close()
             raise
         return listener, sender
 
-    def _collect(self, listener, tx):
+    def _collect(self, listener: socket.socket | None, tx: Mapping[str, Any] | None) -> bytes:
         deadline = time.monotonic() + self.exchange_seconds
         channels = self.channels or (tx["channels"] if tx else UDP_CHANNELS)
         tx_rate = tx["rate"] if tx else WIRE_RATE
@@ -373,7 +390,7 @@ class AudioBridge:
             listener.settimeout(remaining)
             try:
                 packet, _ = listener.recvfrom(65535)
-            except socket.timeout:
+            except TimeoutError:
                 break
             except OSError:
                 time.sleep(remaining)
@@ -384,7 +401,7 @@ class AudioBridge:
                 size += len(wire)
         return b"".join(chunks)
 
-    def _uplink_sender(self, sender, address, frames, stop, silence=b""):
+    def _uplink_sender(self, sender: socket.socket, address: tuple[str, int], frames: queue.Queue[bytes], stop: threading.Event, silence: bytes=b"") -> None:
         # Jitterbuffert: webbläsaren levererar ljud i skurar, så uppspelningen
         # startar först när några ramar finns i kö. Efter sista mikrofonramen
         # skickas tystnad en stund så att SvxLinks VOX kan stänga squelchen.
@@ -392,7 +409,7 @@ class AudioBridge:
         next_time = time.monotonic()
         last_real = 0.0
         playing = False
-        waiting_since = None
+        waiting_since: float | None = None
         while not stop.is_set():
             now = time.monotonic()
             if not playing:
@@ -402,7 +419,7 @@ class AudioBridge:
                 elif not size:
                     waiting_since = None
                 if size and (size >= UPLINK_PREBUFFER_FRAMES
-                             or now - waiting_since >= UPLINK_PREBUFFER_MAX_SECONDS):
+                             or (waiting_since is not None and now - waiting_since >= UPLINK_PREBUFFER_MAX_SECONDS)):
                     playing = True
                     next_time = now
                 else:
@@ -435,7 +452,7 @@ class AudioBridge:
                 logging.warning("UDP-sändningsfel mot SvxLink: %s", exc)
             next_time += frame_seconds
 
-    def run(self, exchange):
+    def run(self, exchange: Callable[[bytes], bytes | None]) -> None:
         """Run one session. ``exchange(bytes)`` returns the portal reply or None on failure."""
         self.running.set()
         try:
@@ -443,7 +460,7 @@ class AudioBridge:
         finally:
             self.running.clear()
 
-    def _run(self, exchange):
+    def _run(self, exchange: Callable[[bytes], bytes | None]) -> None:
         try:
             config = find_udp_audio(self.read_sections(self.config_path))
             if not config["rx"] and not config["tx"]:
@@ -456,21 +473,28 @@ class AudioBridge:
         self.last_error = ""
         rx, tx = config["rx"], config["tx"]
         ptt = PttControl(config["ptt_path"]) if rx else None
-        frames = queue.Queue(maxsize=UPLINK_QUEUE_FRAMES)
+        frames: queue.Queue[bytes] = queue.Queue(maxsize=UPLINK_QUEUE_FRAMES)
         stop = threading.Event()
-        thread = None
+        thread: threading.Thread | None = None
         rx_channels = (self.channels or rx["channels"]) if rx else UDP_CHANNELS
         frame_bytes = (rx["rate"] * FRAME_MS // 1000 * rx_channels * 2) if rx else 0
-        if rx:
+        if rx and sender is not None:
             host = rx["host"]
-            if host in ("", "0.0.0.0"):
+            if host in ("", socket.inet_ntoa(bytes(4))):
                 host = LOCAL_FALLBACK_HOST
             thread = threading.Thread(
                 target=self._uplink_sender,
                 args=(sender, (host, rx["port"]), frames, stop, bytes(frame_bytes)),
                 name="audio-uplink", daemon=True,
             )
-            thread.start()
+            try:
+                thread.start()
+            except BaseException:
+                stop.set()
+                for sock in (listener, sender):
+                    if sock:
+                        sock.close()
+                raise
         failures = 0
         wire_rest = b""
         logging.info("Ljudbrygga startad.")
@@ -503,7 +527,8 @@ class AudioBridge:
                             self.mic_frames += 1
                             if self.on_activity and self.mic_frames % 25 == 1:
                                 self.on_activity()
-                    self._safe_ptt(ptt, True)
+                    if ptt:
+                        self._safe_ptt(ptt, True)
                 elif ptt:
                     wire_rest = b""
                     deadline = time.monotonic() + PTT_DRAIN_SECONDS
@@ -523,20 +548,16 @@ class AudioBridge:
             logging.info("Ljudbrygga stoppad.")
 
     @staticmethod
-    def _push(frames, frame):
+    def _push(frames: queue.Queue[bytes], frame: bytes) -> None:
         try:
             frames.put_nowait(frame)
         except queue.Full:
-            try:
+            with suppress(queue.Empty):
                 frames.get_nowait()
-            except queue.Empty:
-                pass
-            try:
+            with suppress(queue.Full):
                 frames.put_nowait(frame)
-            except queue.Full:
-                pass
 
-    def _safe_ptt(self, ptt, wanted):
+    def _safe_ptt(self, ptt: PttControl, wanted: bool) -> None:
         try:
             ptt.set(wanted)
             if self.last_error.startswith("PTT"):

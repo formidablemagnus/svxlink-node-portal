@@ -1,3 +1,4 @@
+'use strict';
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
 })[char]);
@@ -29,6 +30,7 @@ function compareVersions(current, latest) {
 }
 const isOutdated = (current, latest) => compareVersions(current, latest) < 0;
 const isPrerelease = (current, latest) => compareVersions(current, latest) > 0;
+/** @param {Array<Object>} nodes @param {string} latestSvxlink @param {boolean} canDeleteNodes @returns {void} */
 function renderNodes(nodes, latestSvxlink, canDeleteNodes) {
   const body = document.getElementById('nodes');
   const online = nodes.filter((node) => node.online);
@@ -100,6 +102,7 @@ function renderNodes(nodes, latestSvxlink, canDeleteNodes) {
   }
 }
 let refreshing = false;
+/** @returns {Promise<void>} */
 async function refresh() {
   if (refreshing || document.hidden) return;
   refreshing = true;

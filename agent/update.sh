@@ -10,6 +10,11 @@ readonly RELEASE_API="https://api.github.com/repos/sm0svx/svxlink/releases/lates
 readonly RELEASE_TAG_API="https://api.github.com/repos/sm0svx/svxlink/releases/tags"
 export HOME="$WORK_DIR"
 
+if [[ -L "$WORK_DIR" || -L "$WORK_DIR/update.lock" ]]; then
+  printf 'Fel: Uppdateringskatalogen och låsfilen får inte vara symboliska länkar.\n' >&2
+  exit 1
+fi
+
 fail() {
   printf 'Fel: %s\n' "$*" >&2
   exit 1
@@ -23,7 +28,7 @@ channel="$1"
 if ! command -v flock >/dev/null 2>&1; then
   fail "flock saknas. Installera util-linux."
 fi
-exec 9>"$WORK_DIR/update.lock"
+exec 9>>"$WORK_DIR/update.lock"
 if ! flock -n 9; then
   fail "En SvxLink-uppdatering körs redan."
 fi
@@ -34,6 +39,9 @@ for executable in cmake curl dpkg-deb doxygen g++ git groff make python3; do
   fi
 done
 
+if [[ -L "$SOURCE_DIR" || -L "$SOURCE_DIR/.git" || -L "$SOURCE_DIR/src" || -L "$BUILD_DIR" ]]; then
+  fail "Uppdateringskatalogen får inte innehålla symboliska länkar: $SOURCE_DIR"
+fi
 if [[ -e "$SOURCE_DIR" && ! -d "$SOURCE_DIR/.git" ]]; then
   fail "Uppdateringskatalogen finns men innehåller ingen Git-arbetskopia: $SOURCE_DIR"
 fi
@@ -41,6 +49,9 @@ fi
 if [[ ! -d "$SOURCE_DIR/.git" ]]; then
   printf 'Hämtar SvxLink-källkod...\n' >&2
   git clone --branch master "$REPOSITORY" "$SOURCE_DIR" >&2
+fi
+if [[ -L "$SOURCE_DIR" || -L "$SOURCE_DIR/.git" || -L "$SOURCE_DIR/src" || -L "$BUILD_DIR" ]]; then
+  fail "Uppdateringskatalogen får inte innehålla symboliska länkar: $SOURCE_DIR"
 fi
 
 origin="$(git -C "$SOURCE_DIR" remote get-url origin)"

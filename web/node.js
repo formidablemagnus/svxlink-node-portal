@@ -1,3 +1,4 @@
+'use strict';
 const nodeId = window.location.pathname.split('/').filter(Boolean).pop();
 const setText = (id, value) => { document.getElementById(id).textContent = value; };
 const SERVICE_LABELS = {
@@ -213,6 +214,7 @@ function renderNodeInfo(info) {
   }
 }
 
+/** @param {Object} node @returns {void} */
 function renderNode(node) {
   const status = node.status || {};
   const radio = status.radio || {};
@@ -269,6 +271,7 @@ function renderNode(node) {
   document.getElementById('updated').textContent = `Uppdaterad ${new Date().toLocaleTimeString('sv-SE')}`;
 }
 
+/** @param {string} commandId @param {string|function(Object):string} successMessage @param {string} failureMessage @returns {Promise<string>} */
 async function waitForCommand(commandId, successMessage, failureMessage, maxAttempts = 60, pollInterval = 1000, onProgress = null) {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     await wait(pollInterval);
@@ -361,6 +364,7 @@ async function loadUpdateVersions() {
 }
 loadUpdateVersions();
 
+/** @returns {Promise<void>} */
 async function updateSvxLink() {
   const channel = updateChannel.value;
   const labels = {[channel]: updateLabel(channel)};
@@ -450,6 +454,7 @@ function startReflectorStream() {
       setText('reflector-updated', 'Kunde inte läsa reflektorströmmen.');
     }
   });
+  source.onerror = () => setText('reflector-updated', 'Återansluter till reflektorströmmen…');
 }
 
 function setPresetsDisabled(disabled) {
@@ -514,6 +519,7 @@ async function loadPresets() {
   }
 }
 
+/** @returns {Promise<Object|null>} */
 async function refresh() {
   try {
     const response = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}`, {cache: 'no-store'});

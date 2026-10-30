@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Run a fixed SvxLink build workflow and install its package as root."""
+from __future__ import annotations
+
 import json
 import os
 import pwd
@@ -9,6 +11,8 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from contextlib import suppress
+from typing import IO, NoReturn
 
 BUILD_SCRIPT = "/usr/local/libexec/svxlink-node-portal-build-update"
 BUILD_DIR = "/var/lib/svxlink-node-updater/svxlink/src/build"
@@ -25,7 +29,7 @@ PACKAGE_PATTERN = re.compile(r"svxlink-[A-Za-z0-9.+~_-]{1,128}-Linux\.deb")
 VERSION_PATTERN = re.compile(r"[A-Za-z0-9.+:~_-]{1,128}")
 
 
-def fail(message):
+def fail(message: str) -> NoReturn:
     print(message, file=sys.stderr)
     raise SystemExit(1)
 
@@ -33,7 +37,7 @@ def fail(message):
 CHANNEL_PATTERN = re.compile(r"prerelease|release|[0-9]+(?:\.[0-9]+){1,3}")
 
 
-def read_request():
+def read_request() -> str:
     try:
         request = json.loads(sys.stdin.buffer.read(4096).decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError) as exc:
@@ -48,7 +52,7 @@ def read_request():
     return request["channel"]
 
 
-def copy_limited(source, destination, maximum):
+def copy_limited(source: IO[bytes], destination: IO[bytes], maximum: int) -> int:
     copied = 0
     while True:
         block = source.read(min(1024 * 1024, maximum + 1 - copied))
@@ -60,13 +64,16 @@ def copy_limited(source, destination, maximum):
         destination.write(block)
 
 
-def run_build(channel):
+def run_build(channel: str) -> dict[str, str]:
+    if not isinstance(channel, str) or not CHANNEL_PATTERN.fullmatch(channel):
+        fail("Välj pre-release, senaste stabila release eller ett versionsnummer.")
     try:
         process = subprocess.run(
             [RUNUSER_BIN, "--user", UPDATER_USER, "--", BUILD_SCRIPT, channel],
             capture_output=True,
             timeout=BUILD_TIMEOUT_SECONDS,
             check=False,
+            shell=False,
         )
     except subprocess.TimeoutExpired:
         fail("Tidsgränsen överskreds under SvxLink-bygget.")
@@ -92,7 +99,17 @@ def run_build(channel):
     return result
 
 
-def install_package(package):
+def install_package(package: dict[str, str]) -> None:
+    if (
+        set(package) != {"channel", "package", "version"}
+        or not isinstance(package.get("channel"), str)
+        or not CHANNEL_PATTERN.fullmatch(package["channel"])
+        or not isinstance(package.get("package"), str)
+        or not PACKAGE_PATTERN.fullmatch(package["package"])
+        or not isinstance(package.get("version"), str)
+        or not VERSION_PATTERN.fullmatch(package["version"])
+    ):
+        fail("Byggscriptet returnerade ogiltiga paketuppgifter.")
     if os.path.realpath(BUILD_DIR) != BUILD_DIR:
         fail("Byggkatalogen får inte innehålla symboliska länkar.")
     package_path = os.path.join(BUILD_DIR, package["package"])
@@ -141,6 +158,7 @@ def install_package(package):
             capture_output=True,
             timeout=30,
             check=False,
+            shell=False,
         )
         if (
             package_name.returncode != 0
@@ -153,6 +171,7 @@ def install_package(package):
             capture_output=True,
             timeout=30,
             check=False,
+            shell=False,
         )
         version = package_version.stdout.decode("utf-8", errors="replace").strip()
         if (
@@ -167,6 +186,7 @@ def install_package(package):
             capture_output=True,
             timeout=INSTALL_TIMEOUT_SECONDS,
             check=False,
+            shell=False,
         )
         if install.returncode != 0:
             detail = (
@@ -179,10 +199,8 @@ def install_package(package):
     finally:
         os.close(package_fd)
         if temporary_path is not None:
-            try:
+            with suppress(FileNotFoundError):
                 os.unlink(temporary_path)
-            except FileNotFoundError:
-                pass
 
     try:
         restart = subprocess.run(
@@ -190,6 +208,7 @@ def install_package(package):
             capture_output=True,
             timeout=120,
             check=False,
+            shell=False,
         )
     except subprocess.TimeoutExpired:
         fail("Tidsgränsen överskreds när SvxLink-tjänsten startades om.")
@@ -200,7 +219,7 @@ def install_package(package):
         fail((detail or "systemctl kunde inte starta om SvxLink.")[-1024:])
 
 
-def run_update_service(channel):
+def run_update_service(channel: str) -> None:
     package = run_build(channel)
     install_package(package)
     print(json.dumps({
@@ -210,7 +229,9 @@ def run_update_service(channel):
     }))
 
 
-def start_update_service(channel):
+def start_update_service(channel: str) -> None:
+    if not isinstance(channel, str) or not CHANNEL_PATTERN.fullmatch(channel):
+        fail("Välj pre-release, senaste stabila release eller ett versionsnummer.")
     try:
         process = subprocess.run(
             [
@@ -230,6 +251,7 @@ def start_update_service(channel):
             capture_output=True,
             timeout=3 * 60 * 60 + 50 * 60,
             check=False,
+            shell=False,
         )
     except subprocess.TimeoutExpired:
         fail("Tidsgränsen överskreds vid SvxLink-uppdateringen.")
@@ -244,7 +266,7 @@ def start_update_service(channel):
     sys.stdout.buffer.write(process.stdout)
 
 
-def main():
+def main() -> None:
     if len(sys.argv) == 1:
         start_update_service(read_request())
         return

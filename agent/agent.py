@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Collect local SvxLink status and report it to the central portal."""
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -10,9 +12,12 @@ import subprocess
 import threading
 import time
 from collections import deque
+from collections.abc import Callable, Mapping
+from email.message import Message
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+from typing import NoReturn
 
 from agent import audio, schedules
 from agent.collector import Collector, clean_text, read_config_sections
@@ -25,6 +30,8 @@ LOG_BATCH_SIZE = 50
 LOG_LINE_BYTES = 512
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 CONFIG_DOCUMENTS = {"svxlink.conf", "node_info.json"}
+# Resolve sudo through a fixed path while retaining its normal argv.
+SUDO_BIN = "/usr/bin/sudo"
 CONFIG_HELPER = "/usr/local/libexec/svxlink-node-portal-config"
 SYSTEMCTL_BIN = "/usr/bin/systemctl"
 UPDATE_HELPER = "/usr/local/libexec/svxlink-node-portal-update"
@@ -32,14 +39,14 @@ UPDATE_TIMEOUT_SECONDS = 4 * 60 * 60
 UPDATE_PROGRESS_INTERVAL_SECONDS = 20
 
 
-def required_environment(name):
+def required_environment(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
         raise RuntimeError(f"Miljövariabeln {name} måste anges.")
     return value
 
 
-def validate_portal_url(value):
+def validate_portal_url(value: str) -> str:
     parsed = urlparse(value)
     if (
         parsed.scheme not in ("http", "https")
@@ -53,7 +60,7 @@ def validate_portal_url(value):
     return value.rstrip("/")
 
 
-def read_logic_info(config_path):
+def read_logic_info(config_path: str) -> dict[str, str]:
     try:
         sections = read_config_sections(config_path)
         logic_names = [
@@ -75,32 +82,44 @@ def read_logic_info(config_path):
         return {"logic": "", "callsign": ""}
 
 
-def reject_json_constant(value):
+def reject_json_constant(value: str) -> NoReturn:
     raise ValueError(f"Ogiltigt JSON-konstantvärde: {value}.")
 
 
-def reject_json_constant(value):
-    raise ValueError(f"Ogiltigt JSON-konstantvärde: {value}.")
-
-
-def request_json(url, payload=None, headers=None, timeout=10):
+def request_json(
+    url: str,
+    payload: object | None = None,
+    headers: Mapping[str, str] | None = None,
+    timeout: float = 10,
+) -> object:
+    parsed_url = urlparse(url)
+    if parsed_url.scheme not in ("http", "https") or not parsed_url.netloc:
+        raise ValueError("Portalens URL måste använda HTTP eller HTTPS.")
     request_headers = dict(headers or {})
     body = None
     if payload is not None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request_headers["Content-Type"] = "application/json"
-    request = Request(url, data=body, headers=request_headers)
+    request = Request(url, data=body, headers=request_headers)  # noqa: S310
     opener = build_opener(RejectRedirects())
     with opener.open(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
 class RejectRedirects(HTTPRedirectHandler):
-    def redirect_request(self, request, response, code, message, headers, new_url):
+    def redirect_request(
+        self,
+        request: Request,
+        response: object,
+        code: int,
+        message: str,
+        headers: Message,
+        new_url: str,
+    ) -> None:
         return None
 
 
-def execute_config_command(command):
+def execute_config_command(command: dict[str, object]) -> dict[str, object]:
     if not isinstance(command, dict):
         raise ValueError("Konfigurationsåtgärden måste vara ett JSON-objekt.")
     action = command.get("action")
@@ -132,8 +151,8 @@ def execute_config_command(command):
         raise ValueError("Ogiltigt ID för konfigurationsåtgärden.")
 
     try:
-        process = subprocess.run(
-            ["sudo", "-n", CONFIG_HELPER],
+        process = subprocess.run(  # noqa: S603
+            ["sudo", "-n", CONFIG_HELPER],  # noqa: S607
             input=json.dumps(
                 {key: value for key, value in command.items() if key != "id"},
                 ensure_ascii=False,
@@ -141,6 +160,8 @@ def execute_config_command(command):
             capture_output=True,
             timeout=20,
             check=False,
+            shell=False,
+            executable=SUDO_BIN,
         )
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "Tidsgränsen överskreds vid filåtkomst."}
@@ -161,7 +182,7 @@ def execute_config_command(command):
     return result
 
 
-def read_dtmf_control_paths(config_path):
+def read_dtmf_control_paths(config_path: str) -> list[str]:
     try:
         sections = read_config_sections(config_path)
     except (OSError, UnicodeError) as exc:
@@ -184,7 +205,9 @@ def read_dtmf_control_paths(config_path):
     return paths
 
 
-def execute_dtmf_command(command, config_path):
+def execute_dtmf_command(
+    command: dict[str, object], config_path: str
+) -> dict[str, object]:
     if not isinstance(command, dict) or set(command) != {"id", "action", "sequence"}:
         raise ValueError("DTMF-kommandot från portalen har ogiltigt format.")
     command_id = command["id"]
@@ -234,23 +257,26 @@ def execute_dtmf_command(command, config_path):
     return {"ok": True}
 
 
-def execute_service_command(command):
+def execute_service_command(command: dict[str, object]) -> dict[str, object]:
     if (
         not isinstance(command, dict)
         or set(command) != {"id", "action", "operation"}
         or not isinstance(command["id"], str)
         or not re.fullmatch(r"[0-9a-f]{32}", command["id"])
         or command["action"] != "service"
-        or command["operation"] not in         ("start", "stop", "restart")
+        or not isinstance(command["operation"], str)
+        or command["operation"] not in ("start", "stop", "restart")
     ):
         raise ValueError("SvxLink-tjänståtgärden från portalen har ogiltigt format.")
 
     try:
-        process = subprocess.run(
-            ["sudo", "-n", SYSTEMCTL_BIN, command["operation"], "svxlink.service"],
+        process = subprocess.run(  # noqa: S603
+            ["sudo", "-n", SYSTEMCTL_BIN, command["operation"], "svxlink.service"],  # noqa: S607
             capture_output=True,
             timeout=30,
             check=False,
+            shell=False,
+            executable=SUDO_BIN,
         )
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "Tidsgränsen överskreds vid tjänståtgärden."}
@@ -265,7 +291,10 @@ def execute_service_command(command):
     }
 
 
-def execute_update_command(command, progress_callback=None):
+def execute_update_command(
+    command: dict[str, object],
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, object]:
     if (
         not isinstance(command, dict)
         or set(command) != {"id", "action", "channel"}
@@ -279,7 +308,7 @@ def execute_update_command(command, progress_callback=None):
     progress_stop = threading.Event()
     progress_thread = None
 
-    def report_progress(stage):
+    def report_progress(stage: str) -> None:
         if progress_callback is None:
             return
         try:
@@ -290,7 +319,7 @@ def execute_update_command(command, progress_callback=None):
     if progress_callback is not None:
         report_progress("starting")
 
-        def report_while_running():
+        def report_while_running() -> None:
             while not progress_stop.wait(UPDATE_PROGRESS_INTERVAL_SECONDS):
                 report_progress("working")
 
@@ -303,12 +332,14 @@ def execute_update_command(command, progress_callback=None):
 
     try:
         try:
-            process = subprocess.run(
-                ["sudo", "-n", UPDATE_HELPER],
+            process = subprocess.run(  # noqa: S603
+                ["sudo", "-n", UPDATE_HELPER],  # noqa: S607
                 input=json.dumps({"channel": command["channel"]}).encode("utf-8"),
                 capture_output=True,
                 timeout=UPDATE_TIMEOUT_SECONDS,
                 check=False,
+                shell=False,
+                executable=SUDO_BIN,
             )
         except subprocess.TimeoutExpired:
             return {"ok": False, "error": "Tidsgränsen överskreds vid SvxLink-uppdateringen."}
@@ -341,7 +372,11 @@ def execute_update_command(command, progress_callback=None):
     return result
 
 
-def execute_agent_command(command, config_path, update_progress=None):
+def execute_agent_command(
+    command: dict[str, object],
+    config_path: str,
+    update_progress: Callable[[str], None] | None = None,
+) -> dict[str, object]:
     if isinstance(command, dict) and command.get("action") == "dtmf":
         return execute_dtmf_command(command, config_path)
     if isinstance(command, dict) and command.get("action") == "service":
@@ -353,7 +388,7 @@ def execute_agent_command(command, config_path, update_progress=None):
     return execute_config_command(command)
 
 
-def execute_schedules(command, config_path):
+def execute_schedules(command: dict[str, object], config_path: str) -> dict[str, object]:
     command_id = command.get("id")
     if not isinstance(command_id, str) or not re.fullmatch(r"[0-9a-f]{32}", command_id):
         raise ValueError("Ogiltigt ID för schemaläggningsåtgärden.")
@@ -368,10 +403,18 @@ def execute_schedules(command, config_path):
         return {"ok": False, "error": str(exc)}
 
 
-def process_agent_commands(commands_url, results_url, headers, config_path, on_response=None):
+def process_agent_commands(
+    commands_url: str,
+    results_url: str,
+    headers: Mapping[str, str],
+    config_path: str,
+    on_response: Callable[[dict[str, object]], None] | None = None,
+) -> bool | None:
     try:
         response = request_json(commands_url, headers=headers)
-        commands = response.get("commands") if isinstance(response, dict) else None
+        if not isinstance(response, dict):
+            raise ValueError("Portalen returnerade en ogiltig kommandolista.")
+        commands = response.get("commands")
         if not isinstance(commands, list):
             raise ValueError("Portalen returnerade en ogiltig kommandolista.")
     except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
@@ -386,11 +429,11 @@ def process_agent_commands(commands_url, results_url, headers, config_path, on_r
         if not isinstance(command_id, str):
             logging.warning("Portalen skickade en åtgärd utan giltigt ID.")
             continue
-        progress_callback = None
+        progress_callback: Callable[[str], None] | None = None
         if isinstance(command, dict) and command.get("action") == "update":
-            def progress_callback(stage):
+            def progress_callback(stage: str, _command_id: str = command_id) -> None:
                 request_json(
-                    f"{results_url}/{command_id}/progress",
+                    f"{results_url}/{_command_id}/progress",
                     payload={"stage": stage},
                     headers=headers,
                 )
@@ -421,8 +464,17 @@ def process_agent_commands(commands_url, results_url, headers, config_path, on_r
 
 
 class NodeAgent:
-    def __init__(self, portal_url, node_id, token, config_path, log_path, service,
-                 status_interval, command_interval):
+    def __init__(
+        self,
+        portal_url: str,
+        node_id: str,
+        token: str,
+        config_path: str,
+        log_path: str,
+        service: str,
+        status_interval: float,
+        command_interval: float,
+    ) -> None:
         self.node_id = node_id
         self.config_path = config_path
         self.status_interval = status_interval
@@ -435,8 +487,8 @@ class NodeAgent:
         self.audio_url = f"{portal_url}/api/v1/agent/audio"
         self.portal_url = portal_url
         self.token = token
-        self.audio_udp_port = None
-        self.udp_exchange = None
+        self.audio_udp_port: int | None = None
+        self.udp_exchange: audio.UdpExchange | None = None
         self.udp_blocked_until = 0.0
         self.bridge = audio.AudioBridge(
             config_path, read_config_sections,
@@ -448,27 +500,27 @@ class NodeAgent:
         self.bridge.on_activity = self.status_wake.set
         self.radio_wake = threading.Event()
         self.radio_lock = threading.Lock()
-        self.radio_queue = deque(maxlen=500)
+        self.radio_queue: deque[dict[str, object]] = deque(maxlen=500)
         self.log_wake = threading.Event()
         self.log_lock = threading.Lock()
-        self.log_queue = deque(maxlen=1000)
+        self.log_queue: deque[str] = deque(maxlen=1000)
         self.collector = Collector(
             config_path, log_path, service,
-            on_radio=self.queue_radio, on_change=lambda reason: self.status_wake.set(),
+            on_radio=self.queue_radio, on_change=lambda _reason: self.status_wake.set(),
             on_log=self.queue_logs,
         )
 
-    def queue_radio(self, snapshot):
+    def queue_radio(self, snapshot: dict[str, object]) -> None:
         with self.radio_lock:
             self.radio_queue.append({"t": int(time.time() * 1000), **snapshot})
         self.radio_wake.set()
 
-    def queue_logs(self, lines):
+    def queue_logs(self, lines: list[str]) -> None:
         with self.log_lock:
             self.log_queue.extend(clean_text(line, LOG_LINE_BYTES) for line in lines)
         self.log_wake.set()
 
-    def status_loop(self):
+    def status_loop(self) -> None:
         while True:
             try:
                 status = self.collector.snapshot()
@@ -485,7 +537,7 @@ class NodeAgent:
             # Coalesce bursts of changes into at most one report per second.
             time.sleep(1)
 
-    def radio_loop(self):
+    def radio_loop(self) -> None:
         while True:
             self.radio_wake.wait(1)
             self.radio_wake.clear()
@@ -509,7 +561,7 @@ class NodeAgent:
             else:
                 time.sleep(0.1)
 
-    def log_loop(self):
+    def log_loop(self) -> None:
         while True:
             self.log_wake.wait(1)
             self.log_wake.clear()
@@ -533,7 +585,7 @@ class NodeAgent:
             else:
                 time.sleep(0.2)
 
-    def audio_exchange(self, payload):
+    def audio_exchange(self, payload: bytes) -> bytes | None:
         udp = self.udp_exchange
         if udp is not None:
             reply = udp.exchange(payload)
@@ -548,8 +600,11 @@ class NodeAgent:
             self.bridge.exchange_seconds = audio.EXCHANGE_SECONDS
         return self.http_audio_exchange(payload)
 
-    def http_audio_exchange(self, payload):
-        request = Request(
+    def http_audio_exchange(self, payload: bytes) -> bytes | None:
+        parsed_url = urlparse(self.audio_url)
+        if parsed_url.scheme not in ("http", "https") or not parsed_url.netloc:
+            raise ValueError("Portalens URL måste använda HTTP eller HTTPS.")
+        request = Request(  # noqa: S310
             self.audio_url, data=payload,
             headers={**self.headers, "Content-Type": "application/octet-stream"},
         )
@@ -560,18 +615,23 @@ class NodeAgent:
             logging.debug("Ljudutbyte med portalen misslyckades: %s", exc)
             return None
 
-    def audio_udp_address(self):
+    def audio_udp_address(self) -> tuple[str, int] | None:
         if (self.audio_udp_port is None or os.environ.get("AGENT_AUDIO_UDP", "").lower() == "off"
                 or time.monotonic() < self.udp_blocked_until):
             return None
         host = os.environ.get("AGENT_AUDIO_UDP_HOST") or urlparse(self.portal_url).hostname
         port = int(os.environ.get("AGENT_AUDIO_UDP_PORT") or self.audio_udp_port)
         try:
-            return socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_DGRAM)[0][4]
+            address = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_DGRAM)[0][4]
+            if isinstance(address, tuple) and len(address) == 2:
+                address_host, address_port = address
+                if isinstance(address_host, str) and isinstance(address_port, int):
+                    return address_host, address_port
+            return None
         except (OSError, UnicodeError):
             return None
 
-    def audio_session(self):
+    def audio_session(self) -> None:
         started = time.monotonic()
         previous_error = self.bridge.last_error
         address = self.audio_udp_address()
@@ -591,13 +651,13 @@ class NodeAgent:
                 time.sleep(5)
             self.audio_lock.release()
 
-    def handle_command_response(self, response):
+    def handle_command_response(self, response: dict[str, object]) -> None:
         port = response.get("audio_udp_port")
         self.audio_udp_port = port if isinstance(port, int) and 0 < port < 65536 else None
         if response.get("audio") is True and self.audio_lock.acquire(blocking=False):
             threading.Thread(target=self.audio_session, name="audio", daemon=True).start()
 
-    def command_loop(self):
+    def command_loop(self) -> None:
         while True:
             process_agent_commands(
                 self.commands_url, self.commands_url, self.headers, self.config_path,
@@ -605,7 +665,7 @@ class NodeAgent:
             )
             time.sleep(self.command_interval)
 
-    def run(self):
+    def run(self) -> None:
         self.collector.start()
         self.queue_radio(self.collector.radio_snapshot())
         for target, name in (
@@ -617,7 +677,7 @@ class NodeAgent:
         self.status_loop()
 
 
-def run():
+def run() -> None:
     portal_url = validate_portal_url(required_environment("AGENT_PORTAL_URL"))
     node_id = required_environment("AGENT_NODE_ID")
     token = required_environment("AGENT_TOKEN")
@@ -640,4 +700,4 @@ if __name__ == "__main__":
         run()
     except RuntimeError as exc:
         logging.error("%s", exc)
-        raise SystemExit(1)
+        raise SystemExit(1) from exc

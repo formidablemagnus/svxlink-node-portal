@@ -1,3 +1,4 @@
+'use strict';
 const pathParts = window.location.pathname.split('/').filter(Boolean);
 const nodeId = pathParts[pathParts.length - 2];
 const setText = (id, value) => { document.getElementById(id).textContent = value; };
@@ -21,6 +22,7 @@ function configStatus(documentName, message, isError = false) {
   element.className = `editor-status${isError ? ' error' : ' muted'}`;
 }
 
+/** @param {Object} command @returns {Promise<Object>} */
 async function enqueueConfigCommand(command) {
   const response = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}/config-commands`, {
     method: 'POST',
@@ -44,6 +46,7 @@ async function enqueueConfigCommand(command) {
   throw new Error('Begäran tog för lång tid. Kontrollera nodens agentlogg.');
 }
 
+/** @param {string} documentName @param {boolean} confirmOverwrite @returns {Promise<void>} */
 async function readConfig(documentName, confirmOverwrite = true) {
   const editor = document.getElementById(configNames[documentName]);
   if (
@@ -71,6 +74,7 @@ async function readConfig(documentName, confirmOverwrite = true) {
   }
 }
 
+/** @param {string} documentName @returns {Promise<void>} */
 async function saveConfig(documentName) {
   const editor = document.getElementById(configNames[documentName]);
   if (!configHashes[documentName]) {

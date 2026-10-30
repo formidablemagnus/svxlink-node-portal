@@ -1,13 +1,19 @@
 """Live collection of local SvxLink information (service, config, log, STATE_PTY)."""
+from __future__ import annotations
+
 import json
 import logging
 import os
 import re
 import select
+import shutil
 import subprocess
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
+from contextlib import ExitStack
+from typing import Any, BinaryIO
 
 from agent import audio
 from agent.version import read_version
@@ -31,10 +37,10 @@ EVENT_RE = re.compile(
 )
 
 
-def read_config_sections(config_path):
-    sections = {}
+def read_config_sections(config_path: str | os.PathLike[str]) -> dict[str, dict[str, str]]:
+    sections: dict[str, dict[str, str]] = {}
     current_section = None
-    with open(config_path, "r", encoding="utf-8") as config_file:
+    with open(config_path, encoding="utf-8") as config_file:
         for raw_line in config_file:
             line = raw_line.strip()
             if not line or line.startswith(("#", ";")):
@@ -50,11 +56,11 @@ def read_config_sections(config_path):
     return sections
 
 
-def unquote(value):
+def unquote(value: str) -> str:
     return value.strip().strip("\"'")
 
 
-def active_logics(sections):
+def active_logics(sections: dict[str, dict[str, str]]) -> list[tuple[str, dict[str, str]]]:
     names = [
         unquote(name)
         for name in sections.get("GLOBAL", {}).get("LOGICS", "").split(",")
@@ -68,24 +74,24 @@ def active_logics(sections):
     return result
 
 
-def clean_text(value, limit=None):
+def clean_text(value: str, limit: int | None = None) -> str:
     text = "".join(char for char in value if char == "\t" or ord(char) >= 32).strip()
     if limit is not None:
         text = text.encode("utf-8", errors="replace")[:limit].decode("utf-8", errors="ignore")
     return text
 
 
-def _valid_int(value):
+def _valid_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _info_text(value, limit=128):
+def _info_text(value: object, limit: int = 128) -> str:
     if isinstance(value, bool) or not isinstance(value, (str, int, float)):
         return ""
     return clean_text(str(value), limit)
 
 
-def _info_number(value):
+def _info_number(value: object) -> int | float | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
@@ -98,7 +104,7 @@ def _info_number(value):
     return None
 
 
-def _info_antennas(value):
+def _info_antennas(value: object) -> list[dict[str, Any]]:
     antennas = []
     for item in (value if isinstance(value, list) else [])[:8]:
         if isinstance(item, dict):
@@ -110,12 +116,12 @@ def _info_antennas(value):
     return antennas
 
 
-def _info_ctcss(value):
+def _info_ctcss(value: object) -> list[int | float]:
     values = value if isinstance(value, list) else [value]
     return [n for n in (_info_number(v) for v in values[:16]) if n is not None]
 
 
-def _info_devices(value, transmitter):
+def _info_devices(value: object, transmitter: bool) -> list[dict[str, Any]]:
     devices = []
     for key, item in list((value if isinstance(value, dict) else {}).items())[:16]:
         if not isinstance(item, dict):
@@ -135,16 +141,18 @@ def _info_devices(value, transmitter):
     return devices
 
 
-def normalize_node_info(data):
+def normalize_node_info(data: Any) -> dict[str, Any] | None:
     """Reduce node_info.json to a bounded, display-only structure."""
     if not isinstance(data, dict):
         return None
     tones = data.get("toneToTalkgroup")
     qth = []
-    for item in (data.get("qth") if isinstance(data.get("qth"), list) else [])[:8]:
+    qth_value = data.get("qth")
+    for item in qth_value[:8] if isinstance(qth_value, list) else []:
         if not isinstance(item, dict):
             continue
-        pos = item.get("pos") if isinstance(item.get("pos"), dict) else {}
+        pos_value = item.get("pos")
+        pos = pos_value if isinstance(pos_value, dict) else {}
         qth.append({
             "name": _info_text(item.get("name")),
             "lat": _info_text(pos.get("lat"), 32),
@@ -166,8 +174,8 @@ def normalize_node_info(data):
     }
 
 
-def read_node_info(path):
-    with open(path, "r", encoding="utf-8") as info_file:
+def read_node_info(path: str | os.PathLike[str]) -> dict[str, Any] | None:
+    with open(path, encoding="utf-8") as info_file:
         raw = info_file.read(MAX_NODE_INFO_BYTES + 1)
     if len(raw) > MAX_NODE_INFO_BYTES:
         raise ValueError("node_info.json är för stor.")
@@ -179,7 +187,7 @@ def read_node_info(path):
     return bounded_node_info(normalize_node_info(data))
 
 
-def bounded_node_info(info):
+def bounded_node_info(info: dict[str, Any] | None) -> dict[str, Any] | None:
     if info is not None and len(json.dumps(info, ensure_ascii=False).encode("utf-8")) > 48 * 1024:
         return None
     return info
@@ -188,15 +196,15 @@ def bounded_node_info(info):
 class RadioState:
     """Receiver and transmitter state derived from STATE_PTY events."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.reset()
 
-    def reset(self):
-        self.receivers = {}
-        self.transmitters = {}
-        self.seen = False
+    def reset(self) -> None:
+        self.receivers: dict[str, dict[str, bool | int]] = {}
+        self.transmitters: dict[str, bool] = {}
+        self.seen: bool = False
 
-    def apply(self, event_name, data):
+    def apply(self, event_name: str, data: object) -> None:
         if event_name == "Tx:state":
             if (
                 not isinstance(data, dict)
@@ -240,7 +248,7 @@ class RadioState:
                 }
         self.seen = True
 
-    def snapshot(self, error=None):
+    def snapshot(self, error: str | None = None) -> dict[str, Any]:
         if not self.seen:
             return {
                 "mode": "unknown",
@@ -271,7 +279,7 @@ class RadioState:
         }
 
 
-def parse_state_line(raw_line):
+def parse_state_line(raw_line: bytes) -> tuple[str, Any] | None:
     """Return (event_name, data) for a STATE_PTY line, or None if it is not relevant."""
     parts = raw_line.decode("utf-8").split(" ", 2)
     if len(parts) != 3 or parts[1] not in RADIO_EVENTS:
@@ -282,8 +290,15 @@ def parse_state_line(raw_line):
 class Collector:
     """Gathers node information in background threads and reports changes via callbacks."""
 
-    def __init__(self, config_path, log_path, service="svxlink",
-                 on_radio=None, on_change=None, on_log=None):
+    def __init__(
+        self,
+        config_path: str | os.PathLike[str],
+        log_path: str | os.PathLike[str],
+        service: str = "svxlink",
+        on_radio: Callable[[dict[str, Any]], None] | None = None,
+        on_change: Callable[[str], None] | None = None,
+        on_log: Callable[[list[str]], None] | None = None,
+    ) -> None:
         self.config_path = config_path
         self.log_path = log_path
         self.service = service
@@ -292,36 +307,36 @@ class Collector:
         self.on_log = on_log or (lambda lines: None)
         self._lock = threading.Lock()
         self._radio = RadioState()
-        self._radio_error = "Väntar på status från SvxLink."
-        self._last_snapshot = self._radio.snapshot(self._radio_error)
-        self._lines = deque(maxlen=MAX_LINES)
-        self._log_error = None
+        self._last_snapshot = self._radio.snapshot("Väntar på status från SvxLink.")
+        self._lines: deque[str] = deque(maxlen=MAX_LINES)
+        self._log_error: str | None = None
         self._service = ("okänt", False)
-        self._svxlink_version = ""
-        self._next_version_check = 0.0
-        self._config = {"key": None, "sections": {}, "error": None}
-        self._node_info = {"key": None, "value": None}
-        self._node_info_error = None
+        self._svxlink_version: str = ""
+        self._next_version_check: float = 0.0
+        self._config: dict[str, Any] = {"key": None, "sections": {}, "error": None}
+        self._node_info: dict[str, Any] = {"key": None, "value": None}
+        self._node_info_error: str | None = None
         self.node_info_path = os.path.join(os.path.dirname(config_path), "node_info.json")
-        self._pty_checks = []
+        self._pty_checks: list[dict[str, Any]] = []
         self._stop = threading.Event()
-        self._log_file = None
-        self._log_identity = None
-        self._log_offset = 0
-        self._log_buffer = b""
+        self._log_file: BinaryIO | None = None
+        self._log_stack: ExitStack | None = None
+        self._log_identity: tuple[int, int] | None = None
+        self._log_offset: int = 0
+        self._log_buffer: bytes = b""
 
-    def start(self):
+    def start(self) -> None:
         for target, name in (
             (self._state_loop, "state-pty"),
             (self._housekeeping_loop, "housekeeping"),
         ):
             threading.Thread(target=target, name=name, daemon=True).start()
 
-    def stop(self):
+    def stop(self) -> None:
         self._stop.set()
         self._close_log()
 
-    def config_sections(self):
+    def config_sections(self) -> tuple[dict[str, dict[str, str]], str | None]:
         try:
             file_stat = os.stat(self.config_path)
             key = (file_stat.st_dev, file_stat.st_ino, file_stat.st_size, file_stat.st_mtime_ns)
@@ -335,7 +350,7 @@ class Collector:
         except (OSError, UnicodeError) as exc:
             return {}, f"Kunde inte läsa {self.config_path}: {exc}"
 
-    def node_info(self):
+    def node_info(self) -> dict[str, Any] | None:
         try:
             file_stat = os.stat(self.node_info_path)
             key = (file_stat.st_dev, file_stat.st_ino, file_stat.st_size, file_stat.st_mtime_ns)
@@ -355,11 +370,11 @@ class Collector:
             self._node_info = {"key": key, "value": value}
         return value
 
-    def radio_snapshot(self):
+    def radio_snapshot(self) -> dict[str, Any]:
         with self._lock:
             return self._last_snapshot
 
-    def _publish_radio(self, error):
+    def _publish_radio(self, error: str | None) -> bool:
         with self._lock:
             snapshot = self._radio.snapshot(error)
             changed = snapshot != self._last_snapshot
@@ -368,12 +383,12 @@ class Collector:
             self.on_radio(snapshot)
         return changed
 
-    def _set_radio_unavailable(self, error):
+    def _set_radio_unavailable(self, error: str | None) -> None:
         with self._lock:
             self._radio.reset()
         self._publish_radio(error)
 
-    def _state_pty_path(self):
+    def _state_pty_path(self) -> tuple[str | None, str | None]:
         if not self._service[1]:
             return None, "SvxLink-tjänsten är stoppad."
         sections, error = self.config_sections()
@@ -388,7 +403,7 @@ class Collector:
             return None, f"STATE_PTY saknas i [{name}]."
         return path, None
 
-    def _state_loop(self):
+    def _state_loop(self) -> None:
         while not self._stop.is_set():
             path, error = self._state_pty_path()
             if path is None:
@@ -412,7 +427,7 @@ class Collector:
                 os.close(descriptor)
             self._stop.wait(0.5)
 
-    def _read_state(self, descriptor, path):
+    def _read_state(self, descriptor: int, path: str) -> None:
         buffer = b""
         while not self._stop.is_set():
             current_path, _ = self._state_pty_path()
@@ -447,7 +462,7 @@ class Collector:
                     parse_error = f"Kunde inte tolka status från STATE_PTY: {exc}"
             self._publish_radio(parse_error)
 
-    def _housekeeping_loop(self):
+    def _housekeeping_loop(self) -> None:
         next_slow = 0.0
         while not self._stop.is_set():
             try:
@@ -463,11 +478,14 @@ class Collector:
                 logging.exception("Fel i bakgrundsinsamlingen")
             self._stop.wait(0.1)
 
-    def _refresh_service(self):
+    def _refresh_service(self) -> None:
         try:
+            systemctl = shutil.which("systemctl")
+            if systemctl is None:
+                raise FileNotFoundError("systemctl")
             result = subprocess.run(
-                ["systemctl", "is-active", self.service],
-                capture_output=True, text=True, timeout=2, check=False,
+                [os.path.abspath(systemctl), "is-active", "--", self.service],
+                capture_output=True, text=True, timeout=2, check=False, shell=False,
             )
             value = (result.stdout or result.stderr).strip() or "okänt"
             status = (value[:64], value == "active")
@@ -480,12 +498,15 @@ class Collector:
         if changed:
             self.on_change("service")
 
-    def _refresh_svxlink_version(self):
+    def _refresh_svxlink_version(self) -> None:
         version = ""
         try:
+            svxlink = shutil.which("svxlink")
+            if svxlink is None:
+                raise FileNotFoundError("svxlink")
             result = subprocess.run(
-                ["svxlink", "--version"],
-                capture_output=True, text=True, timeout=5, check=False,
+                [os.path.abspath(svxlink), "--version"],
+                capture_output=True, text=True, timeout=5, check=False, shell=False,
             )
             match = VERSION_RE.search(f"{result.stdout}\n{result.stderr}")
             version = match.group(0) if match else ""
@@ -499,7 +520,7 @@ class Collector:
         if changed:
             self.on_change("svxlink_version")
 
-    def _refresh_pty_checks(self):
+    def _refresh_pty_checks(self) -> None:
         sections, error = self.config_sections()
         if error:
             issues = [{"variable": "svxlink.conf", "logic": None,
@@ -532,32 +553,36 @@ class Collector:
         if changed:
             self.on_change("pty")
 
-    def _open_log(self):
-        file_obj = open(self.log_path, "rb")
-        file_stat = os.fstat(file_obj.fileno())
-        offset = max(0, file_stat.st_size - MAX_TAIL_BYTES)
-        file_obj.seek(offset)
-        raw = file_obj.read(MAX_TAIL_BYTES)
-        if offset:
-            first_newline = raw.find(b"\n")
-            raw = raw[first_newline + 1:] if first_newline >= 0 else b""
-        lines = [clean_text(line.decode("utf-8", errors="replace")) for line in raw.splitlines()]
-        with self._lock:
-            self._lines.clear()
-            self._lines.extend(line for line in lines if line)
-        self._log_file = file_obj
-        self._log_identity = (file_stat.st_dev, file_stat.st_ino)
-        self._log_offset = file_obj.tell()
-        self._log_buffer = b""
+    def _open_log(self) -> None:
+        with ExitStack() as stack:
+            file_obj = stack.enter_context(open(self.log_path, "rb"))
+            file_stat = os.fstat(file_obj.fileno())
+            offset = max(0, file_stat.st_size - MAX_TAIL_BYTES)
+            file_obj.seek(offset)
+            raw = file_obj.read(MAX_TAIL_BYTES)
+            if offset:
+                first_newline = raw.find(b"\n")
+                raw = raw[first_newline + 1:] if first_newline >= 0 else b""
+            lines = [clean_text(line.decode("utf-8", errors="replace")) for line in raw.splitlines()]
+            with self._lock:
+                self._lines.clear()
+                self._lines.extend(line for line in lines if line)
+            self._log_file = file_obj
+            self._log_identity = (file_stat.st_dev, file_stat.st_ino)
+            self._log_offset = file_obj.tell()
+            self._log_buffer = b""
+            self._log_stack = stack.pop_all()
 
-    def _close_log(self):
-        if self._log_file is not None:
-            self._log_file.close()
+    def _close_log(self) -> None:
+        log_stack, self._log_stack = self._log_stack, None
         self._log_file = None
         self._log_identity = None
+        if log_stack is not None:
+            log_stack.close()
 
-    def _poll_log(self):
-        new_lines = []
+    def _poll_log(self) -> None:
+        new_lines: list[str | None] = []
+        error: str | None = None
         try:
             path_stat = os.stat(self.log_path)
             identity = (path_stat.st_dev, path_stat.st_ino)
@@ -583,7 +608,6 @@ class Collector:
                             if line:
                                 self._lines.append(line)
                                 new_lines.append(line)
-            error = None
         except OSError as exc:
             self._close_log()
             error = f"Kunde inte läsa loggfilen {self.log_path}: {exc}"
@@ -600,7 +624,7 @@ class Collector:
         if talkgroup_changed or error_changed:
             self.on_change("log")
 
-    def snapshot(self, max_logs=50, max_line_bytes=512):
+    def snapshot(self, max_logs: int = 50, max_line_bytes: int = 512) -> dict[str, Any]:
         sections, _ = self.config_sections()
         logic_name, callsign = "", ""
         logics = active_logics(sections)
@@ -656,13 +680,13 @@ class Collector:
         }
 
     @staticmethod
-    def _monitor_tgs(sections):
+    def _monitor_tgs(sections: dict[str, dict[str, str]]) -> tuple[list[str], str | None]:
         value = sections.get("ReflectorLogic", {}).get("MONITOR_TGS")
         if value is None:
             return [], "MONITOR_TGS saknas i [ReflectorLogic]."
         talkgroups = []
-        for item in value.split(","):
-            item = item.strip()
+        for raw_item in value.split(","):
+            item = raw_item.strip()
             if not item:
                 continue
             if not item.isdigit() or int(item) <= 0:

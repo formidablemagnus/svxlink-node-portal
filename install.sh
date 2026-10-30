@@ -107,6 +107,7 @@ install_agent_config_helper() {
   install -o root -g root -m 0755 "$source" "$helper"
   local sudoers_tmp
   sudoers_tmp="$(mktemp /etc/sudoers.d/svxlink-node-portal-agent.XXXXXX)"
+  trap 'rm -f -- "$sudoers_tmp"' EXIT
   printf '%s\n' \
     'svxlink ALL=(root) NOPASSWD: /usr/local/libexec/svxlink-node-portal-config, /usr/bin/systemctl start svxlink.service, /usr/bin/systemctl stop svxlink.service, /usr/bin/systemctl restart svxlink.service, /usr/bin/crontab -u svxlink -l, /usr/bin/crontab -u svxlink -, /usr/bin/crontab -u svxlink -r' \
     > "$sudoers_tmp"
@@ -117,6 +118,7 @@ install_agent_config_helper() {
     exit 1
   fi
   mv "$sudoers_tmp" "$sudoers"
+  trap - EXIT
 }
 
 install_agent_update_helpers() {
@@ -153,6 +155,7 @@ install_agent_update_helpers() {
 
   local sudoers_tmp
   sudoers_tmp="$(mktemp /etc/sudoers.d/svxlink-node-portal-agent.XXXXXX)"
+  trap 'rm -f -- "$sudoers_tmp"' EXIT
   printf '%s\n' \
     'svxlink ALL=(root) NOPASSWD: /usr/local/libexec/svxlink-node-portal-config, /usr/local/libexec/svxlink-node-portal-update "", /usr/bin/systemctl start svxlink.service, /usr/bin/systemctl stop svxlink.service, /usr/bin/systemctl restart svxlink.service, /usr/bin/crontab -u svxlink -l, /usr/bin/crontab -u svxlink -, /usr/bin/crontab -u svxlink -r' \
     > "$sudoers_tmp"
@@ -163,6 +166,7 @@ install_agent_update_helpers() {
     exit 1
   fi
   mv "$sudoers_tmp" "$sudoers"
+  trap - EXIT
 }
 
 create_portal_environment() {
@@ -312,6 +316,8 @@ bootstrap_checkout() {
   fi
   local workdir rc=0
   workdir="$(mktemp -d)"
+  trap 'rm -rf -- "$workdir"' EXIT
+  trap 'exit 1' HUP INT TERM
   printf 'Hämtar %s (%s)...\n' "$repo" "$ref"
   if ! git clone --quiet --depth 1 --branch "$ref" -- "$repo" "$workdir/svxlink-node-portal"; then
     rm -rf -- "$workdir"

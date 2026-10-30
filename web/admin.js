@@ -1,3 +1,4 @@
+'use strict';
 const userRows = document.getElementById('user-rows');
 const auditRows = document.getElementById('audit-rows');
 const userStatus = document.getElementById('user-status');
@@ -36,6 +37,7 @@ const OUTCOME_LABELS = {
   queued: 'Köad', completed: 'Utförd', failed: 'Misslyckades', expired: 'Förföll', ok: 'OK',
 };
 
+/** @param {string} path @param {Object} options @returns {Promise<Object>} */
 async function api(path, options = {}) {
   const response = await fetch(path, {
     cache: 'no-store',
@@ -53,6 +55,7 @@ function cell(text) {
   return td;
 }
 
+/** @param {Array<Object>} users @returns {void} */
 function renderUsers(users) {
   userRows.replaceChildren();
   for (const user of users) {
