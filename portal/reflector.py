@@ -7,9 +7,16 @@ import time
 import urllib.request
 import uuid
 
-REFLECTOR_STREAM_URL = os.environ.get(
-    "SVXLINK_REFLECTOR_STREAM_URL", "https://reflector-sm.svxlink.org/api/stream"
+DEFAULT_STREAM_URLS = (
+    "https://svxreflector-fernebo.sk3w.se/api/stream,"
+    "https://svxreflector-kista.sk3w.se/api/stream"
 )
+# Kommaseparerad lista; varje reflektor har en egen nodmängd som summeras.
+REFLECTOR_STREAM_URLS = [
+    url.strip()
+    for url in os.environ.get("SVXLINK_REFLECTOR_STREAM_URL", DEFAULT_STREAM_URLS).split(",")
+    if url.strip()
+]
 MAX_SSE_BYTES = 5 * 1024 * 1024
 
 
@@ -76,12 +83,70 @@ def apply_patch(document, operations):
     return document
 
 
+def merge_states(states):
+    """Sum node counts and talkgroups from several reflector sources."""
+    groups = {}
+    for state in states:
+        for group in state["talkgroups"]:
+            entry = groups.setdefault(group["tg"], {"tg": group["tg"], "nodes": 0, "talkers": 0})
+            entry["nodes"] += group["nodes"]
+            entry["talkers"] += group["talkers"]
+    ok_states = [state for state in states if state["ok"]]
+    connected = any(state["connected"] for state in states)
+    errors = [state["error"] for state in states if state["error"]]
+    stamps = [state["updated_at"] for state in ok_states if state["updated_at"] is not None]
+    return {
+        "ok": bool(ok_states),
+        "connected": connected,
+        "error": None if connected and ok_states and len(ok_states) == len(states) else (" ".join(errors) or None),
+        "node_count": sum(state["node_count"] for state in ok_states),
+        "talkgroups": sorted(groups.values(), key=lambda i: (-i["talkers"], -i["nodes"], i["tg"])),
+        "updated_at": max(stamps) if stamps else None,
+    }
+
+
 class ReflectorHub:
-    def __init__(self, url=REFLECTOR_STREAM_URL):
-        self.url = url
+    """Aggregates the live status of every configured reflector."""
+
+    def __init__(self, urls=None, source_factory=None):
         self.condition = threading.Condition()
         self.sequence = 0
         self.started = False
+        factory = source_factory or ReflectorSource
+        self.sources = [factory(url, self._on_change) for url in (urls or REFLECTOR_STREAM_URLS)]
+        self.state = merge_states([source.state for source in self.sources])
+
+    def ensure_started(self):
+        with self.condition:
+            if self.started:
+                return
+            self.started = True
+        for source in self.sources:
+            source.start()
+
+    def snapshot(self):
+        with self.condition:
+            return self.sequence, self.state
+
+    def wait(self, after, timeout):
+        with self.condition:
+            self.condition.wait_for(lambda: self.sequence > after, timeout=timeout)
+            return self.sequence, self.state
+
+    def _on_change(self):
+        with self.condition:
+            state = merge_states([source.state for source in self.sources])
+            if state == self.state:
+                return
+            self.state = state
+            self.sequence += 1
+            self.condition.notify_all()
+
+
+class ReflectorSource:
+    def __init__(self, url, on_change):
+        self.url = url
+        self.on_change = on_change
         self.state = {
             "ok": False,
             "connected": False,
@@ -93,29 +158,14 @@ class ReflectorHub:
         self.document = {}
         self.generation = None
 
-    def ensure_started(self):
-        with self.condition:
-            if self.started:
-                return
-            self.started = True
+    def start(self):
         threading.Thread(target=self._loop, name="reflector-reader", daemon=True).start()
 
-    def snapshot(self):
-        with self.condition:
-            return self.sequence, self.state
-
-    def wait(self, after, timeout):
-        with self.condition:
-            self.condition.wait_for(lambda: self.sequence > after, timeout=timeout)
-            return self.sequence, self.state
-
     def _publish(self, state):
-        with self.condition:
-            if state == self.state:
-                return
-            self.state = state
-            self.sequence += 1
-            self.condition.notify_all()
+        if state == self.state:
+            return
+        self.state = state
+        self.on_change()
 
     def _handle(self, event_name, payload):
         if not isinstance(payload, dict) or payload.get("topic") != "status":

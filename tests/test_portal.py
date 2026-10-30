@@ -565,6 +565,25 @@ class PortalStatusTests(unittest.TestCase):
                 thread.join(timeout=2)
 
 
+class ReflectorMergeTests(unittest.TestCase):
+    def test_nodes_and_talkgroups_are_summed_across_reflectors(self):
+        from portal.reflector import merge_states, summarize_nodes
+
+        def state(nodes):
+            return {"ok": True, "connected": True, "error": None,
+                    "updated_at": 1, **summarize_nodes(nodes)}
+
+        merged = merge_states([
+            state({"A": {"tg": 240, "isTalker": True}, "B": {"tg": 2400}}),
+            state({"C": {"tg": 240}, "D": {"tg": 5, "hidden": True}}),
+        ])
+        self.assertEqual(merged["node_count"], 3)
+        self.assertEqual(
+            merged["talkgroups"],
+            [{"tg": 240, "nodes": 2, "talkers": 1}, {"tg": 2400, "nodes": 1, "talkers": 0}],
+        )
+
+
 class PortalRadioStreamTests(unittest.TestCase):
     def test_agent_radio_events_reach_sse_viewer_and_enable_watch(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
