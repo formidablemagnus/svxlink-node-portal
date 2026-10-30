@@ -1,3 +1,4 @@
+'use strict';
 const picker = document.getElementById('node-picker');
 const form = document.getElementById('bulk-dtmf-form');
 const input = document.getElementById('dtmf-sequence');
@@ -42,6 +43,7 @@ function updateSelection() {
   else if (status.textContent === 'Välj högst 100 noder per utskick.') status.textContent = '';
 }
 
+/** @param {Array<Object>} nodes @returns {void} */
 function renderNodes(nodes) {
   picker.replaceChildren();
   for (const node of nodes) {
@@ -68,7 +70,6 @@ function renderNodes(nodes) {
   }
   if (!nodes.length) {
     picker.textContent = 'Inga registrerade noder.';
-    nav.textContent = 'Inga registrerade noder';
   }
   updateSelection();
   document.getElementById('updated').textContent =
@@ -115,6 +116,7 @@ document.getElementById('clear-selection').addEventListener('click', () => {
   updateSelection();
 });
 
+/** @param {string} sequence @returns {Promise<boolean>} */
 async function sendToSelected(sequence) {
   const nodeIds = Array.from(
     picker.querySelectorAll('input[type="checkbox"]:checked'),

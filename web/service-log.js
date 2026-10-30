@@ -1,3 +1,4 @@
+'use strict';
 const pathParts = window.location.pathname.split('/').filter(Boolean);
 const nodeId = pathParts[pathParts.length - 2];
 const endpoint = `/api/nodes/${encodeURIComponent(nodeId)}/service-log`;
@@ -9,6 +10,7 @@ const entriesElement = document.getElementById('service-log-entries');
 
 document.getElementById('detail-link').href = `/nodes/${encodeURIComponent(nodeId)}`;
 
+/** @param {string} url @param {Object} options @returns {Promise<Object>} */
 async function api(url, options = {}) {
   const response = await fetch(url, {
     cache: 'no-store',
@@ -20,6 +22,7 @@ async function api(url, options = {}) {
   return data;
 }
 
+/** @param {Array<Object>} entries @returns {void} */
 function renderEntries(entries) {
   entriesElement.replaceChildren();
   document.getElementById('service-log-count').textContent =

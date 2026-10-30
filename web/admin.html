@@ -19,6 +19,7 @@
     </header>
     <div class="admin-tabs" role="tablist" aria-label="Inställningar">
       <button id="users-tab" type="button" role="tab" aria-selected="true" aria-controls="users-panel" tabindex="0">Användare</button>
+      <button id="nodeconfig-tab" type="button" role="tab" aria-selected="false" aria-controls="nodeconfig-panel" tabindex="-1">Nodkonfig</button>
       <button id="backup-tab" type="button" role="tab" aria-selected="false" aria-controls="backup-panel" tabindex="-1">Säkerhetskopia</button>
       <button id="audit-tab" type="button" role="tab" aria-selected="false" aria-controls="audit-panel" tabindex="-1">Granskningslogg</button>
     </div>
@@ -39,6 +40,26 @@
         <thead><tr><th>Användare</th><th>Roll</th><th>Skapad</th><th>Åtgärder</th></tr></thead>
         <tbody id="user-rows"></tbody>
       </table>
+    </section>
+    <section id="nodeconfig-panel" class="panel" role="tabpanel" aria-labelledby="nodeconfig-tab" tabindex="0" hidden>
+      <div class="panel-heading"><div><h2>Nodkonfig</h2>
+        <p class="muted">Värden som används när portalen genererar installationskommandot för en ny nod (Översikt → Lägg till nod). Kommandot hämtar <code>install.sh</code> från GitHub och ansluter noden till portalen.</p></div></div>
+      <form id="nodeconfig-form" class="node-config-form">
+        <label for="nc-portal-url">Portalens adress (som noderna når den)</label>
+        <input id="nc-portal-url" type="text" maxlength="200" autocomplete="off" placeholder="https://portal.example.net">
+        <label for="nc-repo-url">GitHub-repository</label>
+        <input id="nc-repo-url" type="text" maxlength="200" autocomplete="off" required>
+        <label for="nc-repo-ref">Branch eller tagg att installera</label>
+        <input id="nc-repo-ref" type="text" maxlength="100" autocomplete="off" required>
+        <label for="nc-config">SvxLinks konfigurationsfil</label>
+        <input id="nc-config" type="text" maxlength="200" autocomplete="off" required>
+        <label for="nc-log">SvxLinks loggfil</label>
+        <input id="nc-log" type="text" maxlength="200" autocomplete="off" required>
+        <label for="nc-interval">Rapporteringsintervall (sekunder)</label>
+        <input id="nc-interval" type="number" min="1" max="3600" required>
+        <div class="admin-form"><button type="submit">Spara nodkonfig</button></div>
+      </form>
+      <p id="nodeconfig-status" class="editor-status" role="status" aria-live="polite"></p>
     </section>
     <section id="backup-panel" class="panel" role="tabpanel" aria-labelledby="backup-tab" tabindex="0" hidden>
       <div class="panel-heading"><div><h2>Säkerhetskopia</h2>

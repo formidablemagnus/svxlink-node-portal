@@ -32,7 +32,6 @@ nav a:hover, nav a.active { background: #292929; color: white; }
 .node-icon.node-online { vertical-align: middle; }
 .node-offline .node-name { color: var(--muted); }
 .sidebar-footer { margin-top: auto; padding: 12px 10px; color: var(--muted); font-size: 12px; }
-.sidebar-user { margin-bottom: 4px; overflow-wrap: anywhere; }
 nav button.nav-logout { display: block; width: 100%; padding: 9px 11px; border: 0; border-radius: 6px; background: none; color: #ddd; font: inherit; text-align: left; cursor: pointer; }
 nav button.nav-logout:hover { background: #292929; color: white; }
 .login-page { min-height: 100vh; display: grid; place-items: center; }
@@ -52,6 +51,8 @@ header { margin-bottom: 27px; }
 .node-settings { color: var(--muted); }
 .delete-node { padding: 0; background: transparent; color: var(--red); }
 .version-warning { color: #d4a000; text-decoration: none; font-size: 16px; }
+.prerelease-marker { color: #888; display: inline-flex; vertical-align: middle; }
+.update-spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--blue); border-top-color: transparent; border-radius: 50%; vertical-align: -1px; animation: status-spin .8s linear infinite; }
 .node-settings:hover { border-color: var(--blue); color: var(--blue); }
 .node-settings svg, .delete-node svg { width: 19px; height: 19px; }
 .delete-node:hover:not(:disabled) { border-color: var(--red); }
@@ -97,10 +98,9 @@ td .state::before { width: 12px; height: 12px; }
 .status-dot.unknown { background: #f5c518; }
 .status-dot.loading { background: transparent; border: 2px solid var(--muted); border-top-color: transparent; box-sizing: border-box; animation: status-spin .8s linear infinite; }
 @keyframes status-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .status-dot.loading { animation-duration: 2.4s; } }
+@media (prefers-reduced-motion: reduce) { .status-dot.loading, .update-spinner { animation-duration: 2.4s; } }
 .status-dot.radio-tx { background: #e5484d; }
 .status-dot.radio-rx { background: #f5c518; }
-.status-dot.radio-idle { background: var(--green); }
 .status-dot.radio-off { background: var(--muted); }
 .status-item { display: inline-flex; align-items: center; gap: 5px; }
 .status-item small { font-size: 13px; color: var(--muted); font-weight: 400; }
@@ -122,6 +122,10 @@ td .state::before { width: 12px; height: 12px; }
 .detail-card span { display: block; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
 .detail-card strong { display: block; margin-top: 5px; font-size: 19px; overflow-wrap: anywhere; }
 .detail-card small { display: block; margin-top: 3px; color: var(--muted); }
+.detail-card .radio-states { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; }
+.detail-card .radio-states .status-item { display: inline-flex; align-items: center; gap: 6px; color: inherit; font-size: 15px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.detail-card .radio-states .status-dot { display: inline-block; flex: none; }
+.detail-card .radio-states small { display: inline; margin: 0; font-size: 15px; }
 .detail-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .detail-meta dt { color: var(--muted); font-size: 12px; }
 .detail-meta dd { margin: 3px 0 0; overflow-wrap: anywhere; }
@@ -156,6 +160,7 @@ button { padding: 8px 12px; border: 1px solid #4b4b4b; border-radius: 6px; backg
 button:hover:not(:disabled) { border-color: var(--blue); }
 button:disabled { opacity: .55; cursor: not-allowed; }
 .service-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.service-actions select { min-width: 220px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #151515; color: var(--text); font: inherit; }
 .config-editor textarea { display: block; width: 100%; min-height: 220px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: #151515; color: var(--text); font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; resize: vertical; }
 .service-log-form { margin-top: 16px; }
 .service-log-form label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
@@ -201,6 +206,10 @@ dialog label { display: block; margin-bottom: 6px; color: var(--muted); }
 dialog input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #151515; color: var(--text); font: inherit; }
 .delete-node-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 16px; }
 .created-node input { display: block; width: 100%; margin-bottom: 10px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.created-node textarea, .node-config-form input { display: block; width: 100%; margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #151515; color: var(--text); font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.created-node textarea { resize: vertical; }
+.created-node > div > label, .node-config-form > label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.node-config-form { max-width: 680px; }
 .selection-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .node-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
 .node-choice { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: #1a1a1a; cursor: pointer; }
@@ -286,3 +295,6 @@ footer { padding: 0 3px; color: var(--muted); font-size: 12px; }
   th, td { padding: 10px 8px; }
   .node-details, .detail-meta { grid-template-columns: 1fr; }
 }
+
+.ptt-button.ptt-active { background: #c0392b; border-color: #c0392b; color: #fff; }
+.ptt-button { touch-action: none; user-select: none; }

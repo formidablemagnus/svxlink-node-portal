@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Small standard-library HTTP server for the SvxLink node portal."""
+from __future__ import annotations
+
 import argparse
 import hashlib
 import hmac
@@ -8,37 +10,47 @@ import logging
 import os
 import re
 import secrets
+import shlex
 import sqlite3
 import sys
 import threading
 import time
 import urllib.request
 import uuid
+from typing import Any, NoReturn
 from collections import deque
-from contextlib import contextmanager
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+from portal.audio_udp import AudioUdpServer
 from portal.reflector import REFLECTOR_HUB
 from portal.version import read_version
 
 ROOT = Path(__file__).resolve().parent.parent
 PORTAL_VERSION = read_version()
-SVXLINK_VERSIONS_URL = "https://raw.githubusercontent.com/sm0svx/svxlink/master/src/versions"
-_latest_svxlink = {"version": "", "next": 0.0, "lock": threading.Lock(), "busy": False}
+SVXLINK_RELEASE_URL = "https://api.github.com/repos/sm0svx/svxlink/releases/latest"
+SVXLINK_VERSIONS_URL = "https://raw.githubusercontent.com/sm0svx/svxlink/%s/src/versions"
+_latest_svxlink: dict[str, Any] = {"version": "", "next": 0.0, "lock": threading.Lock(), "busy": False}
 
 
-def _fetch_latest_svxlink_version():
+def _fetch_latest_svxlink_version() -> None:
     version = ""
     try:
-        request = urllib.request.Request(SVXLINK_VERSIONS_URL, headers={"User-Agent": "svxlink-node-portal"})
+        request = urllib.request.Request(SVXLINK_RELEASE_URL, headers={"User-Agent": "svxlink-node-portal"})
         with urllib.request.urlopen(request, timeout=10) as response:
-            text = response.read(65536).decode("utf-8", "replace")
-        match = re.search(r"^SVXLINK=(\d+(?:\.\d+)+)\s*$", text, re.MULTILINE)
-        version = match.group(1) if match else ""
+            release = json.loads(response.read(262144).decode("utf-8", "replace"))
+        tag = str(release.get("tag_name", ""))
+        if re.fullmatch(r"v?\d+(?:\.\d+)+", tag) and not release.get("prerelease"):
+            request = urllib.request.Request(SVXLINK_VERSIONS_URL % tag, headers={"User-Agent": "svxlink-node-portal"})
+            with urllib.request.urlopen(request, timeout=10) as response:
+                text = response.read(65536).decode("utf-8", "replace")
+            match = re.search(r"^SVXLINK=(\d+(?:\.\d+)+)\s*$", text, re.MULTILINE)
+            version = match.group(1) if match else ""
     except Exception as exc:
         logging.warning("Kunde inte hämta senaste SvxLink-version: %s", exc)
     with _latest_svxlink["lock"]:
@@ -48,8 +60,47 @@ def _fetch_latest_svxlink_version():
         _latest_svxlink["busy"] = False
 
 
-def latest_svxlink_version():
-    """Return the cached master version; refresh in the background when stale."""
+_stable_releases: dict[str, Any] = {"versions": [], "next": 0.0, "lock": threading.Lock(), "busy": False}
+SVXLINK_RELEASES_URL = "https://api.github.com/repos/sm0svx/svxlink/releases?per_page=30"
+STABLE_RELEASES_SHOWN = 4
+
+
+def _fetch_stable_releases() -> None:
+    versions = []
+    try:
+        request = urllib.request.Request(SVXLINK_RELEASES_URL, headers={"User-Agent": "svxlink-node-portal"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            releases = json.loads(response.read(1024 * 1024).decode("utf-8", "replace"))
+        for release in releases if isinstance(releases, list) else []:
+            tag = str(release.get("tag_name", "")) if isinstance(release, dict) else ""
+            if (
+                re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", tag)
+                and release.get("prerelease") is False
+                and release.get("draft") is not True
+                and tag not in versions
+            ):
+                versions.append(tag)
+        versions = versions[:STABLE_RELEASES_SHOWN]
+    except Exception as exc:
+        logging.warning("Kunde inte hämta SvxLink-releaser: %s", exc)
+    with _stable_releases["lock"]:
+        if versions:
+            _stable_releases["versions"] = versions
+        _stable_releases["next"] = time.monotonic() + (6 * 3600 if versions else 600)
+        _stable_releases["busy"] = False
+
+
+def stable_svxlink_releases() -> list[str]:
+    """Return the newest stable release tags (newest first); refresh in the background."""
+    with _stable_releases["lock"]:
+        if time.monotonic() >= _stable_releases["next"] and not _stable_releases["busy"]:
+            _stable_releases["busy"] = True
+            threading.Thread(target=_fetch_stable_releases, daemon=True).start()
+        return list(_stable_releases["versions"])
+
+
+def latest_svxlink_version() -> str:
+    """Return the cached latest stable release version; refresh in the background when stale."""
     with _latest_svxlink["lock"]:
         if time.monotonic() >= _latest_svxlink["next"] and not _latest_svxlink["busy"]:
             _latest_svxlink["busy"] = True
@@ -74,6 +125,14 @@ PASSWORD_ITERATIONS = 200_000
 MAX_SCHEDULES = 100
 MAX_NODE_INFO_BYTES = 64 * 1024
 AGENT_COMMAND_TTL_SECONDS = 300
+AGENT_UPDATE_TIMEOUT_SECONDS = 4 * 60 * 60
+AGENT_UPDATE_COMMAND_TTL_SECONDS = AGENT_UPDATE_TIMEOUT_SECONDS + 60 * 60
+UPDATE_HEARTBEAT_TIMEOUT_SECONDS = 180
+UPDATE_PENDING_TIMEOUT_SECONDS = 600
+UPDATE_PROGRESS_MESSAGES = {
+    "starting": "Uppdateringen har startat.",
+    "working": "SvxLink byggs och installeras. Uppdateringen pågår.",
+}
 ONLINE_WINDOW_SECONDS = 30
 MAX_LIVE_LOG_LINES = 200
 MAX_LOG_LINES_PER_REQUEST = 100
@@ -91,6 +150,7 @@ STATIC_ASSETS = {
     "schedules.js": JS,
     "service-log.js": JS,
     "dtmf.js": JS,
+    "audio.js": JS,
     "admin.js": JS,
     "login.js": JS,
 }
@@ -100,7 +160,7 @@ SESSION_TTL_SECONDS = 12 * 3600
 SESSION_REFRESH_SECONDS = 300
 LOGIN_MAX_FAILURES = 10
 LOGIN_WINDOW_SECONDS = 300
-_login_failures = {}
+_login_failures: dict[tuple[str, str], list[float]] = {}
 _login_lock = threading.Lock()
 ADMIN_NODE_PAGES = {
     "config": "config.html",
@@ -112,21 +172,27 @@ VALID_RADIO_MODES = {"tx", "rx", "idle", "unknown"}
 MAX_RADIO_EVENTS_PER_REQUEST = 100
 MAX_RADIO_VIEWERS_PER_NODE = 20
 RADIO_STREAM_KEEPALIVE_SECONDS = 15
+MAX_AUDIO_LISTENERS_PER_NODE = 10
+AUDIO_CHUNK_BYTES = 3200
+AUDIO_BACKLOG_CHUNKS = 100
+MAX_MIC_BUFFER_BYTES = 64 * 1024
+MAX_AUDIO_REQUEST_BYTES = 48 * 1024
+PTT_TIMEOUT_SECONDS = 1.5
 
 
 class RadioHub:
     """In-memory fan-out of live radio events from agents to browser viewers."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.condition = threading.Condition()
-        self.nodes = {}
+        self.nodes: dict[str, dict[str, Any]] = {}
 
-    def _node(self, node_id):
+    def _node(self, node_id: str) -> dict[str, Any]:
         return self.nodes.setdefault(
             node_id, {"seq": 0, "events": deque(maxlen=500), "viewers": 0, "latest": None}
         )
 
-    def add_events(self, node_id, events):
+    def add_events(self, node_id: str, events: list[dict[str, Any]]) -> None:
         with self.condition:
             node = self._node(node_id)
             for event in events:
@@ -135,12 +201,12 @@ class RadioHub:
                 node["latest"] = event
             self.condition.notify_all()
 
-    def watched(self, node_id):
+    def watched(self, node_id: str) -> bool:
         with self.condition:
             node = self.nodes.get(node_id)
             return bool(node and node["viewers"] > 0)
 
-    def subscribe(self, node_id):
+    def subscribe(self, node_id: str) -> tuple[int, dict[str, Any] | None] | None:
         with self.condition:
             node = self._node(node_id)
             if node["viewers"] >= MAX_RADIO_VIEWERS_PER_NODE:
@@ -148,12 +214,12 @@ class RadioHub:
             node["viewers"] += 1
             return node["seq"], node["latest"]
 
-    def unsubscribe(self, node_id):
+    def unsubscribe(self, node_id: str) -> None:
         with self.condition:
             node = self._node(node_id)
             node["viewers"] = max(0, node["viewers"] - 1)
 
-    def wait(self, node_id, after, timeout):
+    def wait(self, node_id: str, after: int, timeout: float) -> tuple[int, list[tuple[int, dict[str, Any]]]]:
         with self.condition:
             node = self._node(node_id)
             if node["seq"] <= after:
@@ -164,34 +230,145 @@ class RadioHub:
 RADIO_HUB = RadioHub()
 
 
+class AudioHub:
+    """In-memory relay of live node audio to browsers and browser microphone audio to nodes."""
+
+    def __init__(self) -> None:
+        self.condition = threading.Condition()
+        self.nodes: dict[str, dict[str, Any]] = {}
+
+    def _node(self, node_id: str) -> dict[str, Any]:
+        return self.nodes.setdefault(node_id, {
+            "seq": 0, "chunks": deque(maxlen=AUDIO_BACKLOG_CHUNKS), "listeners": 0,
+            "mic": bytearray(), "ptt_user": None, "ptt_seen": 0.0,
+        })
+
+    def add_audio(self, node_id: str, pcm: bytes) -> None:
+        pcm = bytes(pcm[: len(pcm) // 2 * 2])
+        with self.condition:
+            node = self._node(node_id)
+            for offset in range(0, len(pcm), AUDIO_CHUNK_BYTES):
+                node["seq"] += 1
+                node["chunks"].append((node["seq"], pcm[offset:offset + AUDIO_CHUNK_BYTES]))
+            self.condition.notify_all()
+
+    def subscribe(self, node_id: str) -> int | None:
+        with self.condition:
+            node = self._node(node_id)
+            if node["listeners"] >= MAX_AUDIO_LISTENERS_PER_NODE:
+                return None
+            node["listeners"] += 1
+            return node["seq"]
+
+    def unsubscribe(self, node_id: str) -> None:
+        with self.condition:
+            node = self._node(node_id)
+            node["listeners"] = max(0, node["listeners"] - 1)
+
+    def wait(self, node_id: str, after: int, timeout: float) -> tuple[int, list[bytes]]:
+        with self.condition:
+            node = self._node(node_id)
+            if node["seq"] <= after:
+                self.condition.wait(timeout)
+            return node["seq"], [data for seq, data in node["chunks"] if seq > after]
+
+    def _owner(self, node: dict[str, Any], now: float) -> str | None:
+        if node["ptt_user"] and now - node["ptt_seen"] > PTT_TIMEOUT_SECONDS:
+            node["ptt_user"] = None
+        return node["ptt_user"]
+
+    def wanted(self, node_id: str) -> bool:
+        with self.condition:
+            node = self.nodes.get(node_id)
+            if node is None:
+                return False
+            return node["listeners"] > 0 or self._owner(node, time.monotonic()) is not None
+
+    def push_mic(self, node_id: str, user: str, ptt: bool, pcm: bytes) -> tuple[bool, bool, str | None]:
+        """Return (accepted, started, owner). ``started`` is true on a new transmission."""
+        now = time.monotonic()
+        with self.condition:
+            node = self._node(node_id)
+            owner = self._owner(node, now)
+            if owner not in (None, user):
+                return False, False, owner
+            if not ptt:
+                if owner == user:
+                    node["ptt_user"] = None
+                return True, False, None
+            node["ptt_user"] = user
+            node["ptt_seen"] = now
+            node["mic"].extend(pcm[: len(pcm) // 2 * 2])
+            del node["mic"][:-MAX_MIC_BUFFER_BYTES]
+            return True, owner is None, user
+
+    def take_for_agent(self, node_id: str, max_mic: int | None=None) -> tuple[int, bytes]:
+        """Return (flags, mic_pcm) for an agent audio exchange."""
+        now = time.monotonic()
+        with self.condition:
+            node = self.nodes.get(node_id)
+            if node is None:
+                return 0, b""
+            ptt = self._owner(node, now) is not None
+            limit = len(node["mic"]) if max_mic is None else max_mic // 2 * 2
+            mic = bytes(node["mic"][:limit])
+            del node["mic"][:limit]
+            wanted = node["listeners"] > 0 or ptt or bool(mic)
+            return (1 if wanted else 0) | (2 if ptt or mic else 0), mic
+
+
+AUDIO_HUB = AudioHub()
+AUDIO_UDP = None
+
+
+def node_audio_key(node_id: str) -> bytes | None:
+    with database() as connection:
+        row = connection.execute(
+            "SELECT token_hash FROM nodes WHERE id = ?", (node_id,)
+        ).fetchone()
+    return row["token_hash"].encode("ascii") if row else None
+
+
+def start_audio_udp() -> None:
+    """Start the optional UDP audio endpoint when PORTAL_AUDIO_UDP_PORT is set."""
+    global AUDIO_UDP
+    raw_port = os.environ.get("PORTAL_AUDIO_UDP_PORT", "").strip()
+    if not raw_port or raw_port == "0":
+        return
+    host = os.environ.get("PORTAL_AUDIO_UDP_HOST", "0.0.0.0")
+    AUDIO_UDP = AudioUdpServer(host, int(raw_port), AUDIO_HUB, node_audio_key, touch_node)
+    AUDIO_UDP.start()
+    logging.info("UDP-ljud lyssnar på %s:%s.", host, AUDIO_UDP.port)
+
+
 class LiveLogStore:
     """In-memory ring buffer of streamed log lines per node."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.lock = threading.Lock()
-        self.nodes = {}
+        self.nodes: dict[str, deque[str]] = {}
 
-    def add(self, node_id, lines):
+    def add(self, node_id: str, lines: list[str]) -> None:
         with self.lock:
             buffer = self.nodes.setdefault(node_id, deque(maxlen=MAX_LIVE_LOG_LINES))
             buffer.extend(lines)
 
-    def seed(self, node_id, lines):
+    def seed(self, node_id: str, lines: list[str]) -> None:
         with self.lock:
             if not self.nodes.get(node_id):
                 self.nodes[node_id] = deque(lines, maxlen=MAX_LIVE_LOG_LINES)
 
-    def get(self, node_id):
+    def get(self, node_id: str) -> list[str]:
         with self.lock:
             return list(self.nodes.get(node_id, ()))
 
 
 LIVE_LOGS = LiveLogStore()
 _touch_lock = threading.Lock()
-_last_touch = {}
+_last_touch: dict[str, float] = {}
 
 
-def touch_node(node_id):
+def touch_node(node_id: str) -> None:
     """Refresh last_seen from agent traffic, writing to the database at most every few seconds."""
     monotonic = time.monotonic()
     with _touch_lock:
@@ -205,7 +382,7 @@ def touch_node(node_id):
         )
 
 
-def validate_log_lines(payload):
+def validate_log_lines(payload: dict[str, Any]) -> list[str]:
     lines = payload.get("lines") if isinstance(payload, dict) else None
     if not isinstance(lines, list) or not 1 <= len(lines) <= MAX_LOG_LINES_PER_REQUEST:
         raise ValueError("'lines' måste vara en lista med 1–100 loggrader.")
@@ -217,16 +394,49 @@ def validate_log_lines(payload):
     return clean
 COMMAND_CLEANUP_INTERVAL_SECONDS = 60
 _command_cleanup_lock = threading.Lock()
-_last_command_cleanup = {}
+_last_command_cleanup: dict[str, float] = {}
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 
-def database_path():
+def database_path() -> Path:
     return Path(os.environ.get("PORTAL_DATABASE", "/var/lib/svxlink-node-portal/portal.sqlite3"))
 
 
-def connect_database():
-    global _last_command_cleanup
+def agent_command_ttl(payload: object) -> int:
+    if isinstance(payload, dict) and payload.get("action") == "update":
+        return AGENT_UPDATE_COMMAND_TTL_SECONDS
+    return AGENT_COMMAND_TTL_SECONDS
+
+
+def cleanup_agent_commands(connection: sqlite3.Connection, now: datetime) -> None:
+    candidates = connection.execute(
+        "SELECT id, payload_json, created_at, status FROM agent_commands WHERE created_at < ?",
+        ((now - timedelta(seconds=AGENT_COMMAND_TTL_SECONDS)).isoformat(),),
+    ).fetchall()
+    for row in candidates:
+        try:
+            payload = json.loads(row["payload_json"])
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        ttl = agent_command_ttl(payload)
+        age = now - datetime.fromisoformat(row["created_at"])
+        if age > timedelta(seconds=ttl):
+            if row["status"] != "expired":
+                expired_payload = (
+                    json.dumps({"action": "update"})
+                    if isinstance(payload, dict) and payload.get("action") == "update"
+                    else "{}"
+                )
+                connection.execute(
+                    "UPDATE agent_commands SET status = 'expired', payload_json = ?, "
+                    "result_json = NULL, updated_at = ? WHERE id = ?",
+                    (expired_payload, now.isoformat(), row["id"]),
+                )
+            if age > timedelta(seconds=ttl + 60):
+                connection.execute("DELETE FROM agent_commands WHERE id = ?", (row["id"],))
+
+
+def connect_database() -> sqlite3.Connection:
     path = database_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=10)
@@ -264,6 +474,12 @@ def connect_database():
         )"""
     )
     connection.execute(
+        """CREATE TABLE IF NOT EXISTS portal_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )"""
+    )
+    connection.execute(
         """CREATE TABLE IF NOT EXISTS dtmf_buttons (
             position INTEGER PRIMARY KEY,
             label TEXT NOT NULL,
@@ -286,15 +502,12 @@ def connect_database():
             expires_at TEXT NOT NULL
         )"""
     )
-    try:
+    # Existing databases may have case-only duplicates; create_user still checks duplicates.
+    with suppress(sqlite3.IntegrityError):
         connection.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS portal_users_username_nocase "
             "ON portal_users (username COLLATE NOCASE)"
         )
-    except sqlite3.IntegrityError:
-        # Äldre databaser kan innehålla namn som bara skiljer sig i skiftläge;
-        # create_user kontrollerar dubbletter även utan indexet.
-        pass
     connection.execute(
         """CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -324,27 +537,14 @@ def connect_database():
         last_cleanup = _last_command_cleanup.get(cleanup_key, 0)
         if current_time - last_cleanup >= COMMAND_CLEANUP_INTERVAL_SECONDS:
             now = datetime.now(timezone.utc)
-            expired_before = (now - timedelta(seconds=AGENT_COMMAND_TTL_SECONDS)).isoformat()
-            delete_before = (
-                now - timedelta(seconds=AGENT_COMMAND_TTL_SECONDS + 60)
-            ).isoformat()
-            connection.execute(
-                "UPDATE agent_commands SET status = 'expired', payload_json = '{}', "
-                "result_json = NULL, updated_at = ? "
-                "WHERE created_at < ? AND status != 'expired'",
-                (now.isoformat(), expired_before),
-            )
-            connection.execute(
-                "DELETE FROM agent_commands WHERE created_at < ?",
-                (delete_before,),
-            )
+            cleanup_agent_commands(connection, now)
             _last_command_cleanup[cleanup_key] = current_time
     connection.commit()
     return connection
 
 
 @contextmanager
-def database():
+def database() -> Iterator[sqlite3.Connection]:
     connection = connect_database()
     try:
         yield connection
@@ -356,7 +556,7 @@ def database():
         connection.close()
 
 
-def provision_node(name):
+def provision_node(name: str) -> dict[str, str]:
     clean_name = name.strip()
     if not clean_name or len(clean_name) > 100:
         raise ValueError("Nodnamnet måste innehålla 1–100 tecken.")
@@ -370,12 +570,124 @@ def provision_node(name):
     with database() as connection:
         connection.execute(
             "INSERT INTO nodes (id, name, token_hash, created_at) VALUES (?, ?, ?, ?)",
-            (node_id, clean_name, hashlib.sha256(token.encode("utf-8")).hexdigest(), now),
+            (node_id, clean_name, hashlib.sha256(token.encode()).hexdigest(), now),
         )
     return {"node_id": node_id, "name": clean_name, "token": token}
 
 
-def validate_status(payload):
+NODE_CONFIG_DEFAULTS = {
+    "portal_url": "",
+    "repo_url": "https://github.com/formidablemagnus/svxlink-node-portal",
+    "repo_ref": "main",
+    "svxlink_config": "/etc/svxlink/svxlink.conf",
+    "svxlink_logfile": "/var/log/svxlink",
+    "interval_seconds": 5,
+}
+PORTAL_URL_RE = re.compile(r"https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~/-]*)?")
+GITHUB_REPO_RE = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?")
+GIT_REF_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,99}")
+ABSOLUTE_PATH_RE = re.compile(r"/[A-Za-z0-9._/-]{1,200}")
+
+
+def validate_node_config(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict) or set(payload) != set(NODE_CONFIG_DEFAULTS):
+        raise ValueError("Nodkonfigurationen har fel fält.")
+    for key in NODE_CONFIG_DEFAULTS:
+        if key != "interval_seconds" and not isinstance(payload[key], str):
+            raise ValueError("Alla fält utom intervallet måste vara text.")
+    portal_url = payload["portal_url"].strip().rstrip("/")
+    if portal_url and (not PORTAL_URL_RE.fullmatch(portal_url) or "//" in portal_url[8:]):
+        raise ValueError(
+            "Portaladressen måste vara en HTTP- eller HTTPS-adress utan inloggningsuppgifter, "
+            "query eller fragment, till exempel https://portal.example.net."
+        )
+    repo = GITHUB_REPO_RE.fullmatch(payload["repo_url"].strip())
+    if not repo:
+        raise ValueError("Repository måste vara en GitHub-adress, till exempel https://github.com/ägare/repo.")
+    repo_ref = payload["repo_ref"].strip()
+    if (
+        not GIT_REF_RE.fullmatch(repo_ref)
+        or ".." in repo_ref
+        or repo_ref.endswith(("/", ".lock"))
+        or "//" in repo_ref
+    ):
+        raise ValueError("Branch eller tagg innehåller ogiltiga tecken.")
+    paths = {}
+    for key, label in (("svxlink_config", "Konfigurationsfilen"), ("svxlink_logfile", "Loggfilen")):
+        value = payload[key].strip()
+        if not ABSOLUTE_PATH_RE.fullmatch(value) or ".." in value.split("/"):
+            raise ValueError(f"{label} måste vara en absolut sökväg utan särtecken.")
+        paths[key] = value
+    interval = payload["interval_seconds"]
+    if type(interval) is not int or not 1 <= interval <= 3600:
+        raise ValueError("Rapporteringsintervallet måste vara 1–3600 sekunder.")
+    return {
+        "portal_url": portal_url,
+        "repo_url": f"https://github.com/{repo.group(1)}/{repo.group(2)}",
+        "repo_ref": repo_ref,
+        "svxlink_config": paths["svxlink_config"],
+        "svxlink_logfile": paths["svxlink_logfile"],
+        "interval_seconds": interval,
+    }
+
+
+def get_node_config(connection: sqlite3.Connection | None=None) -> dict[str, Any]:
+    def read(conn: sqlite3.Connection) -> dict[str, Any]:
+        return {row["key"]: row["value"] for row in conn.execute(
+            "SELECT key, value FROM portal_settings WHERE key LIKE 'node_config.%'"
+        ).fetchall()}
+
+    if connection is None:
+        with database() as conn:
+            stored = read(conn)
+    else:
+        stored = read(connection)
+    config = dict(NODE_CONFIG_DEFAULTS)
+    for key in config:
+        value = stored.get(f"node_config.{key}")
+        if value is not None:
+            config[key] = int(value) if key == "interval_seconds" else value
+    return config
+
+
+def save_node_config(actor: str, payload: dict[str, Any]) -> dict[str, Any]:
+    config = validate_node_config(payload)
+    with database() as connection:
+        for key, value in config.items():
+            connection.execute(
+                "INSERT INTO portal_settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (f"node_config.{key}", str(value)),
+            )
+        record_audit(connection, actor, "node-config.update", config["repo_url"])
+    return config
+
+
+def build_install_command(config: dict[str, Any], node_id: str, token: str) -> str | None:
+    """Return a one-line agent installer command, or None while no portal URL is set."""
+    if not config["portal_url"]:
+        return None
+    repo = config["repo_url"]
+    ref = config["repo_ref"]
+    raw_url = (
+        repo.replace("https://github.com/", "https://raw.githubusercontent.com/", 1)
+        + f"/{ref}/install.sh"
+    )
+    environment = [
+        ("AGENT_PORTAL_URL", config["portal_url"]),
+        ("AGENT_NODE_ID", node_id),
+        ("AGENT_TOKEN", token),
+        ("AGENT_INTERVAL_SECONDS", str(config["interval_seconds"])),
+        ("SVXLINK_CONFIG", config["svxlink_config"]),
+        ("SVXLINK_LOGFILE", config["svxlink_logfile"]),
+        ("SVX_INSTALL_REPO", repo + ".git"),
+        ("SVX_INSTALL_REF", ref),
+    ]
+    assignments = " ".join(f"{name}={shlex.quote(value)}" for name, value in environment)
+    return f"curl -fsSL {shlex.quote(raw_url)} | sudo env {assignments} bash -s -- agent"
+
+
+def validate_status(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Statusrapporten måste vara ett JSON-objekt.")
     active = payload.get("active")
@@ -401,7 +713,7 @@ def validate_status(payload):
     node_info = payload.get("node_info")
     if node_info is not None and (
         not isinstance(node_info, dict)
-        or len(json.dumps(node_info, ensure_ascii=False).encode("utf-8")) > MAX_NODE_INFO_BYTES
+        or len(json.dumps(node_info, ensure_ascii=False).encode()) > MAX_NODE_INFO_BYTES
     ):
         raise ValueError("'node_info' måste vara ett JSON-objekt på högst 64 kB.")
     logs = payload.get("logs", [])
@@ -411,7 +723,7 @@ def validate_status(payload):
         if not isinstance(line, str):
             raise ValueError("Varje loggrad måste vara text.")
         try:
-            line_size = len(line.encode("utf-8"))
+            line_size = len(line.encode())
         except UnicodeEncodeError as exc:
             raise ValueError("Loggraderna måste innehålla giltig Unicode-text.") from exc
         if line_size > MAX_LOG_LINE_BYTES:
@@ -431,7 +743,7 @@ def validate_status(payload):
     }
 
 
-def optional_text(payload, key, limit):
+def optional_text(payload: dict[str, Any], key: str, limit: int) -> str | None:
     value = payload.get(key)
     if value is None:
         return None
@@ -440,7 +752,38 @@ def optional_text(payload, key, limit):
     return value
 
 
-def validate_status_details(payload):
+def validate_udp_audio(value: object) -> dict[str, Any]:
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError("'udp_audio' måste vara ett JSON-objekt.")
+    flags = {}
+    for key in ("listen", "talk", "ptt"):
+        flag = value.get(key, False)
+        if type(flag) is not bool:
+            raise ValueError(f"'udp_audio.{key}' måste vara boolean.")
+        flags[key] = flag
+    issues = value.get("issues", [])
+    if (
+        not isinstance(issues, list)
+        or len(issues) > 5
+        or any(not isinstance(issue, str) or len(issue) > 256 for issue in issues)
+    ):
+        raise ValueError("'udp_audio.issues' måste vara en lista med högst 5 texter.")
+    mic_frames = value.get("mic_frames", 0)
+    if type(mic_frames) is not int or not 0 <= mic_frames <= 10**12:
+        raise ValueError("'udp_audio.mic_frames' måste vara ett heltal.")
+    numbers = {}
+    for key in ("rx_rate", "rx_channels"):
+        number = value.get(key, 0)
+        if type(number) is not int or not 0 <= number <= 1_000_000:
+            raise ValueError(f"'udp_audio.{key}' måste vara ett heltal.")
+        numbers[key] = number
+    return {**flags, **numbers, "issues": issues, "mic_frames": mic_frames,
+            "error": optional_text(value, "error", 256) or ""}
+
+
+def validate_status_details(payload: dict[str, Any]) -> dict[str, Any]:
     monitor_tgs = payload.get("monitor_tgs", [])
     if (
         not isinstance(monitor_tgs, list)
@@ -470,11 +813,12 @@ def validate_status_details(payload):
         "monitor_tgs": monitor_tgs,
         "monitor_tgs_error": optional_text(payload, "monitor_tgs_error", 256),
         "pty_checks": clean_checks,
+        "udp_audio": validate_udp_audio(payload.get("udp_audio")),
         **counters,
     }
 
 
-def validate_radio(radio):
+def validate_radio(radio: object) -> dict[str, Any]:
     if not isinstance(radio, dict):
         raise ValueError("'radio' måste vara ett JSON-objekt.")
     mode = radio.get("mode", "unknown")
@@ -530,7 +874,7 @@ def validate_radio(radio):
     }
 
 
-def validate_radio_events(payload):
+def validate_radio_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     events = payload.get("events") if isinstance(payload, dict) else None
     if not isinstance(events, list) or not 1 <= len(events) <= MAX_RADIO_EVENTS_PER_REQUEST:
         raise ValueError("'events' måste vara en lista med 1–100 radiohändelser.")
@@ -545,24 +889,75 @@ def validate_radio_events(payload):
     return clean
 
 
-def node_rows():
+def node_rows() -> list[dict[str, Any]]:
     with database() as connection:
         rows = connection.execute(
             "SELECT id, name, status_json, last_seen FROM nodes ORDER BY name COLLATE NOCASE"
         ).fetchall()
-    return [node_record(row) for row in rows]
+        updates = active_update_statuses(connection)
+    return [node_record(row, updates.get(row["id"])) for row in rows]
 
 
-def node_by_id(node_id):
+def node_by_id(node_id: str) -> dict[str, Any] | None:
     with database() as connection:
         row = connection.execute(
             "SELECT id, name, status_json, last_seen FROM nodes WHERE id = ?",
             (node_id,),
         ).fetchone()
-    return node_record(row) if row else None
+        update = active_update_statuses(connection, {node_id}).get(node_id)
+    return node_record(row, update) if row else None
 
 
-def node_record(row):
+def expire_stalled_updates(connection: sqlite3.Connection, now: datetime) -> None:
+    """Expire updates whose agent stopped reporting (heartbeat every 20 s)."""
+    rows = connection.execute(
+        "SELECT id, payload_json, status, created_at, updated_at FROM agent_commands "
+        "WHERE status IN ('pending', 'in_progress')"
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"])
+            limit = UPDATE_HEARTBEAT_TIMEOUT_SECONDS if row["status"] == "in_progress" \
+                else UPDATE_PENDING_TIMEOUT_SECONDS
+            stamp = row["updated_at"] if row["status"] == "in_progress" else row["created_at"]
+            stale = now - datetime.fromisoformat(stamp) > timedelta(seconds=limit)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(payload, dict) and payload.get("action") == "update" and stale:
+            connection.execute(
+                "UPDATE agent_commands SET status = 'expired', result_json = NULL, "
+                "updated_at = ? WHERE id = ? AND status = ?",
+                (now.isoformat(), row["id"], row["status"]),
+            )
+
+
+def active_update_statuses(connection: sqlite3.Connection, node_ids: Iterable[str] | None=None) -> dict[str, dict[str, Any]]:
+    expire_stalled_updates(connection, datetime.now(timezone.utc))
+    rows = connection.execute(
+        "SELECT node_id, payload_json, status, result_json FROM agent_commands "
+        "WHERE status IN ('pending', 'in_progress') ORDER BY created_at DESC"
+    ).fetchall()
+    updates = {}
+    for row in rows:
+        if node_ids is not None and row["node_id"] not in node_ids:
+            continue
+        if row["node_id"] in updates:
+            continue
+        try:
+            payload = json.loads(row["payload_json"])
+            progress = json.loads(row["result_json"]) if row["result_json"] else None
+        except (TypeError, json.JSONDecodeError):
+            logging.error("Ogiltig uppdateringsstatus för nod %s.", row["node_id"])
+            continue
+        if isinstance(payload, dict) and payload.get("action") == "update":
+            updates[row["node_id"]] = {
+                "status": row["status"],
+                "progress": progress if isinstance(progress, dict) else None,
+            }
+    return updates
+
+
+def node_record(row: sqlite3.Row, update: dict[str, Any] | None=None) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     last_seen = row["last_seen"]
     online = False
@@ -575,16 +970,22 @@ def node_record(row):
     status = json.loads(row["status_json"]) if row["status_json"] else None
     if status is not None:
         merge_live_data(row["id"], status)
+        if not online:
+            status["active"] = None
+            status["service_status"] = "unknown"
+            status["current_tg"] = None
+            status["logs"] = []
     return {
         "id": row["id"],
         "name": row["name"],
         "online": online,
         "last_seen": last_seen,
         "status": status,
+        "update": update,
     }
 
 
-def merge_live_data(node_id, status):
+def merge_live_data(node_id: str, status: dict[str, Any]) -> None:
     """Overlay streamed radio and log data on the last full status snapshot."""
     logs = LIVE_LOGS.get(node_id)
     if logs:
@@ -596,7 +997,7 @@ def merge_live_data(node_id, status):
         status["radio"] = {key: value for key, value in latest.items() if key != "t"}
 
 
-def validate_config_command(payload):
+def validate_config_command(payload: object) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Begäran måste vara ett JSON-objekt.")
     action = payload.get("action")
@@ -634,7 +1035,7 @@ def validate_config_command(payload):
     return payload
 
 
-def validate_dtmf_command(payload):
+def validate_dtmf_command(payload: object) -> dict[str, str]:
     if not isinstance(payload, dict) or set(payload) != {"action", "sequence"}:
         raise ValueError("DTMF-begäran har ogiltigt format.")
     sequence = payload["sequence"]
@@ -650,7 +1051,7 @@ def validate_dtmf_command(payload):
     return {"action": "dtmf", "sequence": sequence}
 
 
-def validate_service_command(payload):
+def validate_service_command(payload: object) -> dict[str, str]:
     if (
         not isinstance(payload, dict)
         or set(payload) != {"action", "operation"}
@@ -661,7 +1062,24 @@ def validate_service_command(payload):
     return {"action": "service", "operation": payload["operation"]}
 
 
-def validate_dtmf_buttons(payload):
+def is_update_channel(value: object) -> bool:
+    return isinstance(value, str) and (
+        value in ("prerelease", "release") or re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", value) is not None
+    )
+
+
+def validate_update_command(payload: object) -> dict[str, str]:
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"action", "channel"}
+        or payload["action"] != "update"
+        or not is_update_channel(payload["channel"])
+    ):
+        raise ValueError("Ogiltig SvxLink-uppdatering.")
+    return {"action": "update", "channel": payload["channel"]}
+
+
+def validate_dtmf_buttons(payload: object) -> list[dict[str, str]]:
     if (
         not isinstance(payload, dict)
         or set(payload) != {"buttons"}
@@ -681,7 +1099,7 @@ def validate_dtmf_buttons(payload):
     return buttons
 
 
-def list_dtmf_buttons():
+def list_dtmf_buttons() -> list[dict[str, str]]:
     with database() as connection:
         rows = connection.execute(
             "SELECT label, sequence FROM dtmf_buttons ORDER BY position"
@@ -689,7 +1107,7 @@ def list_dtmf_buttons():
     return [{"label": row["label"], "sequence": row["sequence"]} for row in rows]
 
 
-def replace_dtmf_buttons(buttons):
+def replace_dtmf_buttons(buttons: list[dict[str, str]]) -> None:
     with database() as connection:
         connection.execute("DELETE FROM dtmf_buttons")
         connection.executemany(
@@ -698,7 +1116,7 @@ def replace_dtmf_buttons(buttons):
         )
 
 
-def validate_schedules_command(payload):
+def validate_schedules_command(payload: object) -> dict[str, Any]:
     if not isinstance(payload, dict) or payload.get("action") != "schedules":
         raise ValueError("Ogiltig schemaläggningsåtgärd.")
     if payload.get("operation") == "read" and set(payload) == {"action", "operation"}:
@@ -718,33 +1136,37 @@ def validate_schedules_command(payload):
     return payload
 
 
-def validate_agent_command(payload):
+def validate_agent_command(payload: object) -> dict[str, Any]:
     if isinstance(payload, dict) and payload.get("action") == "dtmf":
         return validate_dtmf_command(payload)
     if isinstance(payload, dict) and payload.get("action") == "service":
         return validate_service_command(payload)
+    if isinstance(payload, dict) and payload.get("action") == "update":
+        return validate_update_command(payload)
     if isinstance(payload, dict) and payload.get("action") == "schedules":
         return validate_schedules_command(payload)
     return validate_config_command(payload)
 
 
-def reject_json_constant(value):
+def reject_json_constant(value: str) -> NoReturn:
     raise ValueError(f"Ogiltigt JSON-konstantvärde: {value}.")
 
 
-def command_audit_summary(command):
+def command_audit_summary(command: dict[str, Any]) -> tuple[str, str]:
     action = command["action"]
     if action == "dtmf":
         return "dtmf", command["sequence"]
     if action == "service":
         return "service", command["operation"]
+    if action == "update":
+        return "update", command["channel"]
     if action == "schedules":
         return "schedules", command["operation"]
     return f"config.{action}", command["document"]
 
 
-def record_audit(connection, actor, action, detail="", node_id=None, node_name=None,
-                 outcome="ok", command_id=None):
+def record_audit(connection: sqlite3.Connection, actor: str, action: str, detail: str="", node_id: str | None=None, node_name: str | None=None,
+                 outcome: str="ok", command_id: str | None=None) -> None:
     connection.execute(
         "INSERT INTO audit_log (created_at, actor, action, node_id, node_name, detail, "
         "outcome, command_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -758,10 +1180,7 @@ def record_audit(connection, actor, action, detail="", node_id=None, node_name=N
     )
 
 
-def list_audit(limit=AUDIT_PAGE_SIZE, node_id=None):
-    expired_before = (
-        datetime.now(timezone.utc) - timedelta(seconds=AGENT_COMMAND_TTL_SECONDS + 60)
-    ).isoformat()
+def list_audit(limit: int=AUDIT_PAGE_SIZE, node_id: str | None=None) -> list[dict[str, Any]]:
     query = (
         "SELECT created_at, actor, action, node_id, node_name, detail, outcome "
         "FROM audit_log"
@@ -771,14 +1190,20 @@ def list_audit(limit=AUDIT_PAGE_SIZE, node_id=None):
         query += " WHERE node_id = ?"
         params.append(node_id)
     query += " ORDER BY id DESC LIMIT ?"
-    params.append(limit)
     with database() as connection:
-        rows = connection.execute(query, params).fetchall()
+        rows = connection.execute(query, [*params, limit]).fetchall()
     entries = []
+    now = datetime.now(timezone.utc)
     for row in rows:
         entry = dict(row)
-        if entry["outcome"] == "queued" and entry["created_at"] < expired_before:
-            entry["outcome"] = "expired"
+        if entry["outcome"] == "queued":
+            ttl = (
+                AGENT_UPDATE_COMMAND_TTL_SECONDS
+                if entry["action"] == "update"
+                else AGENT_COMMAND_TTL_SECONDS
+            )
+            if now - datetime.fromisoformat(entry["created_at"]) > timedelta(seconds=ttl + 60):
+                entry["outcome"] = "expired"
         entries.append(entry)
     return entries
 
@@ -799,7 +1224,7 @@ BACKUP_TABLES = {
 }
 
 
-def create_backup(actor):
+def create_backup(actor: str) -> dict[str, Any]:
     with database() as connection:
         tables = {}
         for table, columns in BACKUP_TABLES.items():
@@ -816,7 +1241,7 @@ def create_backup(actor):
     }
 
 
-def validate_backup(backup):
+def validate_backup(backup: object) -> dict[str, list[dict[str, Any]]]:
     if (
         not isinstance(backup, dict)
         or backup.get("format") != BACKUP_FORMAT
@@ -874,7 +1299,7 @@ def validate_backup(backup):
     return clean
 
 
-def restore_backup(actor, backup):
+def restore_backup(actor: str, backup: object) -> dict[str, int]:
     tables = validate_backup(backup)
     with database() as connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -894,7 +1319,7 @@ def restore_backup(actor, backup):
     return {table: len(rows) for table, rows in tables.items()}
 
 
-def hash_password(password):
+def hash_password(password: str) -> str:
     salt =  secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac(
         "sha256", password.encode("utf-8"), salt, PASSWORD_ITERATIONS
@@ -902,7 +1327,7 @@ def hash_password(password):
     return f"pbkdf2_sha256${PASSWORD_ITERATIONS}${salt.hex()}${digest.hex()}"
 
 
-def verify_password(password, stored):
+def verify_password(password: str, stored: str) -> bool:
     try:
         scheme, iterations, salt, digest = stored.split("$")
         if scheme != "pbkdf2_sha256":
@@ -915,7 +1340,7 @@ def verify_password(password, stored):
         return False
 
 
-def validate_user_fields(username, password, role):
+def validate_user_fields(username: str, password: str, role: str) -> None:
     if not isinstance(username, str) or not USERNAME_PATTERN.fullmatch(username):
         raise ValueError("Användarnamnet måste vara 1–40 tecken: A–Z, 0–9, punkt, understreck eller bindestreck.")
     if not isinstance(password, str) or not (
@@ -932,7 +1357,7 @@ def validate_user_fields(username, password, role):
         raise ValueError("Rollen måste vara admin eller operator.")
 
 
-def list_users():
+def list_users() -> list[dict[str, Any]]:
     users = [{"username": admin_credentials()[0], "role": "admin", "builtin": True}]
     with database() as connection:
         rows = connection.execute(
@@ -942,7 +1367,7 @@ def list_users():
     return users
 
 
-def create_user(actor, username, password, role):
+def create_user(actor: str, username: str, password: str, role: str) -> None:
     validate_user_fields(username, password, role)
     if username.lower() == admin_credentials()[0].lower():
         raise ValueError("Användarnamnet är reserverat för huvudadministratören.")
@@ -963,7 +1388,7 @@ def create_user(actor, username, password, role):
         record_audit(connection, actor, "user.create", f"{username} ({role})")
 
 
-def update_user(actor, username, password=None, role=None):
+def update_user(actor: str, username: str, password: str | None=None, role: str | None=None) -> bool:
     with database() as connection:
         row = connection.execute(
             "SELECT username, role FROM portal_users WHERE username = ? COLLATE NOCASE",
@@ -995,7 +1420,7 @@ def update_user(actor, username, password=None, role=None):
     return True
 
 
-def delete_user(actor, username):
+def delete_user(actor: str, username: str) -> bool:
     with database() as connection:
         row = connection.execute(
             "SELECT username FROM portal_users WHERE username = ? COLLATE NOCASE",
@@ -1016,7 +1441,7 @@ def delete_user(actor, username):
     return True
 
 
-def delete_node(actor, node_id):
+def delete_node(actor: str, node_id: str) -> bool:
     with database() as connection:
         node = connection.execute(
             "SELECT name FROM nodes WHERE id = ?", (node_id,)
@@ -1034,11 +1459,11 @@ def delete_node(actor, node_id):
     return True
 
 
-def _same_text(first, second):
-    return hmac.compare_digest(first.encode("utf-8"), second.encode("utf-8"))
+def _same_text(first: str, second: str) -> bool:
+    return hmac.compare_digest(first.encode("utf-8"), second.encode())
 
 
-def authenticate(username, password):
+def authenticate(username: str, password: str) -> tuple[str, str] | None:
     """Return (canonical username, role) for valid credentials, otherwise None.
 
     Usernames are matched case-insensitively."""
@@ -1060,13 +1485,13 @@ def authenticate(username, password):
     return None
 
 
-def authenticate_user(username, password):
+def authenticate_user(username: str, password: str) -> str | None:
     """Return the role for valid credentials, otherwise None."""
     result = authenticate(username, password)
     return result[1] if result else None
 
 
-def resolve_user(username):
+def resolve_user(username: str) -> tuple[str, str] | None:
     """Return (canonical username, role) for an existing account."""
     expected_user = admin_credentials()[0]
     if username.lower() == expected_user.lower():
@@ -1079,7 +1504,7 @@ def resolve_user(username):
     return (row["username"], row["role"]) if row else None
 
 
-def create_session(username):
+def create_session(username: str) -> str:
     token = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc)
     with database() as connection:
@@ -1090,7 +1515,7 @@ def create_session(username):
             "INSERT INTO sessions (token_hash, username, created_at, expires_at) "
             "VALUES (?, ?, ?, ?)",
             (
-                hashlib.sha256(token.encode("utf-8")).hexdigest(),
+                hashlib.sha256(token.encode()).hexdigest(),
                 username,
                 now.isoformat(),
                 (now + timedelta(seconds=SESSION_TTL_SECONDS)).isoformat(),
@@ -1099,11 +1524,11 @@ def create_session(username):
     return token
 
 
-def session_user(token):
+def session_user(token: str) -> tuple[str, str] | None:
     """Return (username, role) for a valid session token and extend it."""
     if not token:
         return None
-    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
     now = datetime.now(timezone.utc)
     with database() as connection:
         row = connection.execute(
@@ -1125,16 +1550,16 @@ def session_user(token):
     return user
 
 
-def destroy_session(token):
+def destroy_session(token: str) -> None:
     if token:
         with database() as connection:
             connection.execute(
                 "DELETE FROM sessions WHERE token_hash = ?",
-                (hashlib.sha256(token.encode("utf-8")).hexdigest(),),
+                (hashlib.sha256(token.encode()).hexdigest(),),
             )
 
 
-def login_throttled(key):
+def login_throttled(key: tuple[str, str]) -> bool:
     now = time.monotonic()
     with _login_lock:
         attempts = [t for t in _login_failures.get(key, []) if now - t < LOGIN_WINDOW_SECONDS]
@@ -1142,27 +1567,26 @@ def login_throttled(key):
         return len(attempts) >= LOGIN_MAX_FAILURES
 
 
-def record_login_failure(key):
+def record_login_failure(key: tuple[str, str]) -> None:
     with _login_lock:
         if len(_login_failures) > 10000:
             _login_failures.clear()
         _login_failures.setdefault(key, []).append(time.monotonic())
 
 
-def clear_login_failures(key):
+def clear_login_failures(key: tuple[str, str]) -> None:
     with _login_lock:
         _login_failures.pop(key, None)
 
 
-def enqueue_agent_command(node_id, payload, actor="system"):
+def enqueue_agent_command(node_id: str, payload: dict[str, Any], actor: str="system") -> str | None:
     command = validate_agent_command(payload)
     now = datetime.now(timezone.utc)
     created_at = now.isoformat()
     with database() as connection:
-        connection.execute(
-            "DELETE FROM agent_commands WHERE created_at < ?",
-            ((now - timedelta(seconds=AGENT_COMMAND_TTL_SECONDS)).isoformat(),),
-        )
+        connection.execute("BEGIN IMMEDIATE")
+        cleanup_agent_commands(connection, now)
+        expire_stalled_updates(connection, now)
         node = connection.execute(
             "SELECT id, last_seen, status_json FROM nodes WHERE id = ?", (node_id,)
         ).fetchone()
@@ -1177,6 +1601,25 @@ def enqueue_agent_command(node_id, payload, actor="system"):
             raise RuntimeError("Nodens senaste kontakttid är ogiltig.") from None
         if (now - last_seen).total_seconds() > ONLINE_WINDOW_SECONDS:
             raise RuntimeError("Noden är offline. Anslut den innan du skickar kommandon.")
+        active_commands = connection.execute(
+            "SELECT payload_json FROM agent_commands "
+            "WHERE node_id = ? AND status IN ('pending', 'in_progress')",
+            (node_id,),
+        ).fetchall()
+        active_actions = []
+        for row in active_commands:
+            try:
+                active_payload = json.loads(row["payload_json"])
+            except json.JSONDecodeError:
+                logging.error("Ogiltigt kommando i kön för nod %s.", node_id)
+                raise RuntimeError("Nodens åtgärdskö innehåller ett ogiltigt kommando.") from None
+            active_actions.append(
+                active_payload.get("action") if isinstance(active_payload, dict) else None
+            )
+        if "update" in active_actions:
+            raise RuntimeError("Noden uppdateras. Vänta tills uppdateringen är klar.")
+        if command.get("action") == "update" and active_actions:
+            raise RuntimeError("Noden har andra väntande åtgärder. Vänta tills de är klara.")
         if command.get("action") == "dtmf":
             status = json.loads(node["status_json"]) if node["status_json"] else None
             if not isinstance(status, dict) or status.get("active") is not True:
@@ -1206,17 +1649,13 @@ def enqueue_agent_command(node_id, payload, actor="system"):
     return command_id
 
 
-def claim_agent_commands(node_id):
+def claim_agent_commands(node_id: str) -> list[dict[str, Any]]:
     now = datetime.now(timezone.utc)
     now_text = now.isoformat()
-    expired_before = (now - timedelta(seconds=AGENT_COMMAND_TTL_SECONDS)).isoformat()
     retry_before = (now - timedelta(seconds=45)).isoformat()
     with database() as connection:
-        connection.execute(
-            "UPDATE agent_commands SET status = 'expired', updated_at = ? "
-            "WHERE node_id = ? AND created_at < ? AND status IN ('pending', 'in_progress')",
-            (now_text, node_id, expired_before),
-        )
+        cleanup_agent_commands(connection, now)
+        expire_stalled_updates(connection, now)
         stale_commands = connection.execute(
             "SELECT id, payload_json FROM agent_commands "
             "WHERE node_id = ? AND status = 'in_progress' AND updated_at < ?",
@@ -1224,12 +1663,24 @@ def claim_agent_commands(node_id):
         ).fetchall()
         for row in stale_commands:
             payload = json.loads(row["payload_json"])
+            if payload.get("action") == "update":
+                continue
             status = "expired" if payload.get("action") == "dtmf" else "pending"
             connection.execute(
                 "UPDATE agent_commands SET status = ?, updated_at = ? "
                 "WHERE id = ? AND status = 'in_progress'",
                 (status, now_text, row["id"]),
             )
+        active_updates = connection.execute(
+            "SELECT payload_json FROM agent_commands "
+            "WHERE node_id = ? AND status = 'in_progress'",
+            (node_id,),
+        ).fetchall()
+        if any(
+            json.loads(row["payload_json"]).get("action") == "update"
+            for row in active_updates
+        ):
+            return []
         rows = connection.execute(
             "SELECT id, payload_json FROM agent_commands "
             "WHERE node_id = ? AND status = 'pending' ORDER BY created_at LIMIT 1",
@@ -1246,7 +1697,7 @@ def claim_agent_commands(node_id):
     return commands
 
 
-def complete_agent_command(node_id, command_id, result):
+def complete_agent_command(node_id: str, command_id: str, result: dict[str, Any]) -> bool:
     if not isinstance(result, dict) or type(result.get("ok")) is not bool:
         raise ValueError("Resultatet måste innehålla en boolean 'ok'.")
     with database() as connection:
@@ -1298,6 +1749,14 @@ def complete_agent_command(node_id, command_id, result):
     elif command["action"] == "service":
         if set(result) != {"ok"}:
             raise ValueError("Tjänstresultatet har ogiltigt format.")
+    elif command["action"] == "update":
+        if (
+            set(result) != {"ok", "channel", "version"}
+            or result["channel"] != command["channel"]
+            or not isinstance(result["version"], str)
+            or not re.fullmatch(r"[A-Za-z0-9.+:~_-]{1,128}", result["version"])
+        ):
+            raise ValueError("Uppdateringsresultatet har ogiltigt format.")
     elif command["action"] == "schedules":
         if set(result) != {"ok", "schedules", "other_lines", "cron_target", "sha256"} or not (
             isinstance(result["schedules"], list)
@@ -1338,11 +1797,45 @@ def complete_agent_command(node_id, command_id, result):
     return cursor.rowcount == 1
 
 
-def take_agent_command_result(command_id):
+def report_agent_command_progress(node_id: str, command_id: str, progress: object) -> bool:
+    if (
+        not isinstance(progress, dict)
+        or set(progress) != {"stage"}
+        or not isinstance(progress["stage"], str)
+        or progress["stage"] not in UPDATE_PROGRESS_MESSAGES
+    ):
+        raise ValueError("Uppdateringsstatusen har ogiltigt format.")
+    now = datetime.now(timezone.utc).isoformat()
+    progress_json = json.dumps({
+        "stage": progress["stage"],
+        "message": UPDATE_PROGRESS_MESSAGES[progress["stage"]],
+        "updated_at": now,
+    }, ensure_ascii=False)
+    with database() as connection:
+        row = connection.execute(
+            "SELECT payload_json FROM agent_commands "
+            "WHERE id = ? AND node_id = ? AND status = 'in_progress'",
+            (command_id, node_id),
+        ).fetchone()
+        if row is None:
+            return False
+        command = json.loads(row["payload_json"])
+        if not isinstance(command, dict) or command.get("action") != "update":
+            return False
+        cursor = connection.execute(
+            "UPDATE agent_commands SET result_json = ?, updated_at = ? "
+            "WHERE id = ? AND node_id = ? AND status = 'in_progress'",
+            (progress_json, now, command_id, node_id),
+        )
+    return cursor.rowcount == 1
+
+
+def take_agent_command_result(command_id: str) -> dict[str, Any] | None:
     now = datetime.now(timezone.utc)
     with database() as connection:
         row = connection.execute(
-            "SELECT status, result_json, created_at FROM agent_commands WHERE id = ?",
+            "SELECT status, result_json, created_at, payload_json "
+            "FROM agent_commands WHERE id = ?",
             (command_id,),
         ).fetchone()
         if row is None:
@@ -1351,14 +1844,18 @@ def take_agent_command_result(command_id):
             result = json.loads(row["result_json"])
             connection.execute("DELETE FROM agent_commands WHERE id = ?", (command_id,))
             return {"status": row["status"], "result": result}
+        if row["status"] == "in_progress" and row["result_json"]:
+            return {"status": row["status"], "progress": json.loads(row["result_json"])}
         created_at = datetime.fromisoformat(row["created_at"])
-        if (now - created_at).total_seconds() > AGENT_COMMAND_TTL_SECONDS:
+        payload = json.loads(row["payload_json"])
+        ttl = agent_command_ttl(payload)
+        if (now - created_at).total_seconds() > ttl:
             connection.execute("DELETE FROM agent_commands WHERE id = ?", (command_id,))
             return {"status": "expired"}
         return {"status": row["status"]}
 
 
-def admin_credentials():
+def admin_credentials() -> tuple[str, str]:
     username = os.environ.get("PORTAL_ADMIN_USER", "")
     password = os.environ.get("PORTAL_ADMIN_PASSWORD", "")
     if not username or not password:
@@ -1371,10 +1868,16 @@ def admin_credentials():
 class PortalHandler(BaseHTTPRequestHandler):
     server_version = f"SvxLinkPortal/{PORTAL_VERSION}"
 
-    def log_message(self, format_string, *args):
+    def end_headers(self) -> None:
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "same-origin")
+        super().end_headers()
+
+    def log_message(self, format_string: str, *args: object) -> None:
         logging.info("%s - %s", self.address_string(), format_string % args)
 
-    def send_json(self, status, payload, headers=()):
+    def send_json(self, status: int, payload: dict[str, Any], headers: Sequence[tuple[str, str]]=()) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1385,14 +1888,14 @@ class PortalHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def send_redirect(self, location):
+    def send_redirect(self, location: str) -> None:
         self.send_response(302)
         self.send_header("Location", location)
         self.send_header("Content-Length", "0")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
 
-    def send_asset(self, asset):
+    def send_asset(self, asset: str) -> None:
         body = (WEB_ROOT / asset).read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", STATIC_ASSETS[asset])
@@ -1401,7 +1904,7 @@ class PortalHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def session_token(self):
+    def session_token(self) -> str:
         cookie = SimpleCookie()
         try:
             cookie.load(self.headers.get("Cookie", ""))
@@ -1410,14 +1913,14 @@ class PortalHandler(BaseHTTPRequestHandler):
         morsel = cookie.get(SESSION_COOKIE)
         return morsel.value if morsel else ""
 
-    def session_cookie(self, value, max_age):
+    def session_cookie(self, value: str, max_age: int) -> tuple[str, str]:
         parts = [f"{SESSION_COOKIE}={value}", "Path=/", "HttpOnly", "SameSite=Strict",
                  f"Max-Age={max_age}"]
         if self.headers.get("X-Forwarded-Proto", "").lower() == "https":
             parts.append("Secure")
         return ("Set-Cookie", "; ".join(parts))
 
-    def handle_login(self):
+    def handle_login(self) -> None:
         try:
             payload = self.read_json_body(MAX_REQUEST_BYTES)
             if (
@@ -1450,7 +1953,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             [self.session_cookie(token, SESSION_TTL_SECONDS)],
         )
 
-    def read_json_body(self, max_bytes):
+    def read_json_body(self, max_bytes: int) -> Any:
         try:
             content_length = int(self.headers.get("Content-Length", "0"))
         except ValueError as exc:
@@ -1462,17 +1965,17 @@ class PortalHandler(BaseHTTPRequestHandler):
             raise ValueError("Begäran är ofullständig.")
         return json.loads(raw.decode("utf-8"))
 
-    def authenticated_agent_id(self):
+    def authenticated_agent_id(self) -> str | None:
         authorization = self.headers.get("Authorization", "")
         token = authorization[7:] if authorization.startswith("Bearer ") else ""
-        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest() if token else ""
+        token_hash = hashlib.sha256(token.encode()).hexdigest() if token else ""
         with database() as connection:
             node = connection.execute(
                 "SELECT id FROM nodes WHERE token_hash = ?", (token_hash,)
             ).fetchone()
         return node["id"] if node else None
 
-    def require_admin(self, admin_only=False):
+    def require_admin(self, admin_only: bool=False) -> bool:
         user = session_user(self.session_token())
         if user is None:
             if self.command == "GET" and not urlparse(self.path).path.startswith("/api/"):
@@ -1487,7 +1990,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             return False
         return True
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/api/v1/agent/commands":
             node_id = self.authenticated_agent_id()
@@ -1498,6 +2001,8 @@ class PortalHandler(BaseHTTPRequestHandler):
             self.send_json(200, {
                 "commands": claim_agent_commands(node_id),
                 "watch": RADIO_HUB.watched(node_id),
+                "audio": AUDIO_HUB.wanted(node_id),
+                "audio_udp_port": AUDIO_UDP.port if AUDIO_UDP else None,
             })
             return
         if path == "/login":
@@ -1577,6 +2082,9 @@ class PortalHandler(BaseHTTPRequestHandler):
         elif path == "/api/users":
             if self.require_admin(admin_only=True):
                 self.send_json(200, {"users": list_users()})
+        elif path == "/api/node-config":
+            if self.require_admin(admin_only=True):
+                self.send_json(200, {"config": get_node_config()})
         elif path == "/api/audit":
             if self.require_admin(admin_only=True):
                 query = parse_qs(urlparse(self.path).query)
@@ -1611,6 +2119,8 @@ class PortalHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"buttons": list_dtmf_buttons()})
         elif path == "/api/reflector-events":
             self.stream_reflector_events()
+        elif path == "/api/svxlink-releases":
+            self.send_json(200, {"releases": stable_svxlink_releases()})
         elif path == "/api/nodes":
             self.send_json(200, {
                 "nodes": node_rows(),
@@ -1619,6 +2129,13 @@ class PortalHandler(BaseHTTPRequestHandler):
                 "can_delete_nodes": self.role == "admin",
                 "role": self.role,
             })
+        elif path.startswith("/api/nodes/") and path.endswith("/audio"):
+            node_id = path[len("/api/nodes/"):-len("/audio")]
+            node = node_by_id(node_id) if node_id and "/" not in node_id else None
+            if node is None:
+                self.send_json(404, {"error": "Noden hittades inte."})
+            else:
+                self.stream_audio(node)
         elif path.startswith("/api/nodes/") and path.endswith("/radio-events"):
             node_id = path[len("/api/nodes/"):-len("/radio-events")]
             node = node_by_id(node_id) if node_id and "/" not in node_id else None
@@ -1658,7 +2175,7 @@ class PortalHandler(BaseHTTPRequestHandler):
         else:
             self.send_json(404, {"error": "Sidan hittades inte."})
 
-    def stream_reflector_events(self):
+    def stream_reflector_events(self) -> None:
         REFLECTOR_HUB.ensure_started()
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -1668,9 +2185,9 @@ class PortalHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
 
-        def send(data):
+        def send(data: dict[str, Any]) -> None:
             payload = json.dumps(data, ensure_ascii=False)
-            self.wfile.write(f"event: reflector\ndata: {payload}\n\n".encode("utf-8"))
+            self.wfile.write(f"event: reflector\ndata: {payload}\n\n".encode())
             self.wfile.flush()
 
         try:
@@ -1688,7 +2205,50 @@ class PortalHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionError, OSError):
             pass
 
-    def stream_radio_events(self, node):
+    def stream_audio(self, node: dict[str, Any]) -> None:
+        node_id = node["id"]
+        if not ((node["status"] or {}).get("udp_audio") or {}).get("listen"):
+            self.send_json(409, {"error": "Noden har ingen UDP-ljudkälla konfigurerad."})
+            return
+        sequence = AUDIO_HUB.subscribe(node_id)
+        if sequence is None:
+            self.send_json(429, {"error": "För många samtidiga ljudlyssnare för noden."})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            while True:
+                new_sequence, chunks = AUDIO_HUB.wait(node_id, sequence, 5)
+                if chunks:
+                    sequence = new_sequence
+                    for data in chunks:
+                        self.wfile.write(len(data).to_bytes(2, "big") + data)
+                else:
+                    self.wfile.write(b"\x00\x00")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionError, OSError):
+            pass
+        finally:
+            AUDIO_HUB.unsubscribe(node_id)
+
+    def read_binary_body(self, max_bytes: int) -> bytes:
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise ValueError("Ogiltig Content-Length.") from exc
+        if content_length < 0 or content_length > max_bytes:
+            raise ValueError("Begäran är större än tillåtet.")
+        raw = self.rfile.read(content_length)
+        if len(raw) != content_length:
+            raise ValueError("Begäran är ofullständig.")
+        return raw
+
+    def stream_radio_events(self, node: dict[str, Any]) -> None:
         node_id = node["id"]
         subscription = RADIO_HUB.subscribe(node_id)
         if subscription is None:
@@ -1705,9 +2265,9 @@ class PortalHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
 
-        def send(event_name, data):
+        def send(event_name: str, data: dict[str, Any]) -> None:
             payload = json.dumps(data, ensure_ascii=False)
-            self.wfile.write(f"event: {event_name}\ndata: {payload}\n\n".encode("utf-8"))
+            self.wfile.write(f"event: {event_name}\ndata: {payload}\n\n".encode())
             self.wfile.flush()
 
         try:
@@ -1730,7 +2290,7 @@ class PortalHandler(BaseHTTPRequestHandler):
         finally:
             RADIO_HUB.unsubscribe(node_id)
 
-    def do_DELETE(self):
+    def do_DELETE(self) -> None:
         path = urlparse(self.path).path
         if path.startswith("/api/nodes/"):
             if not self.require_admin(admin_only=True):
@@ -1769,7 +2329,7 @@ class PortalHandler(BaseHTTPRequestHandler):
         else:
             self.send_json(200, {"users": list_users()})
 
-    def do_POST(self):
+    def do_POST(self) -> None:
         path = urlparse(self.path).path
         if path == "/api/login":
             self.handle_login()
@@ -1796,7 +2356,24 @@ class PortalHandler(BaseHTTPRequestHandler):
             except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
                 self.send_json(400, {"error": str(exc)})
                 return
-            self.send_json(201, credentials)
+            self.send_json(201, {
+                **credentials,
+                "install_command": build_install_command(
+                    get_node_config(), credentials["node_id"], credentials["token"]
+                ),
+            })
+            return
+        if path == "/api/node-config":
+            if not self.require_admin(admin_only=True):
+                return
+            try:
+                config = save_node_config(
+                    self.actor, self.read_json_body(MAX_REQUEST_BYTES)
+                )
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            self.send_json(200, {"config": config})
             return
         if path == "/api/restore":
             if not self.require_admin(admin_only=True):
@@ -1999,6 +2576,30 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.send_json(202, {"command_id": command_id, "status": "pending"})
             return
 
+        if path.startswith("/api/nodes/") and path.endswith("/update-commands"):
+            if not self.require_admin(admin_only=True):
+                return
+            node_id = path[len("/api/nodes/"):-len("/update-commands")].rstrip("/")
+            try:
+                payload = self.read_json_body(MAX_REQUEST_BYTES)
+                if not isinstance(payload, dict) or set(payload) != {"channel"}:
+                    raise ValueError("Uppdateringsbegäran måste innehålla en kanal.")
+                command = validate_update_command(
+                    {"action": "update", "channel": payload["channel"]}
+                )
+                command_id = enqueue_agent_command(node_id, command, self.actor)
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            except RuntimeError as exc:
+                self.send_json(409, {"error": str(exc)})
+                return
+            if command_id is None:
+                self.send_json(404, {"error": "Noden hittades inte."})
+            else:
+                self.send_json(202, {"command_id": command_id, "status": "pending"})
+            return
+
         if path.startswith("/api/nodes/") and path.endswith("/service-commands"):
             if not self.require_admin(admin_only=True):
                 return
@@ -2042,15 +2643,34 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.send_json(202, {"command_id": command_id, "status": "pending"})
             return
 
+        if path.startswith("/api/v1/agent/commands/") and path.endswith("/progress"):
+            agent_node_id = self.authenticated_agent_id()
+            if agent_node_id is None:
+                self.send_json(401, {"error": "Ogiltig nodautentisering."})
+                return
+            command_id = path[len("/api/v1/agent/commands/"):-len("/progress")].rstrip("/")
+            try:
+                progress = self.read_json_body(MAX_REQUEST_BYTES)
+                updated = report_agent_command_progress(agent_node_id, command_id, progress)
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            if not updated:
+                self.send_json(404, {"error": "SvxLink-uppdateringen hittades inte."})
+            else:
+                touch_node(agent_node_id)
+                self.send_json(200, {"ok": True})
+            return
+
         if path.startswith("/api/v1/agent/commands/") and path.endswith("/result"):
-            node_id = self.authenticated_agent_id()
-            if node_id is None:
+            agent_node_id = self.authenticated_agent_id()
+            if agent_node_id is None:
                 self.send_json(401, {"error": "Ogiltig nodautentisering."})
                 return
             command_id = path[len("/api/v1/agent/commands/"):-len("/result")].rstrip("/")
             try:
                 result = self.read_json_body(MAX_COMMAND_RESULT_BYTES)
-                completed = complete_agent_command(node_id, command_id, result)
+                completed = complete_agent_command(agent_node_id, command_id, result)
             except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
                 self.send_json(400, {"error": str(exc)})
                 return
@@ -2060,9 +2680,67 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.send_json(200, {"ok": True})
             return
 
+        if path == "/api/v1/agent/audio":
+            agent_node_id = self.authenticated_agent_id()
+            if agent_node_id is None:
+                self.send_json(401, {"error": "Ogiltig nodautentisering."})
+                return
+            try:
+                pcm = self.read_binary_body(MAX_AUDIO_REQUEST_BYTES)
+            except ValueError as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            if pcm:
+                AUDIO_HUB.add_audio(agent_node_id, pcm)
+            touch_node(agent_node_id)
+            flags, mic = AUDIO_HUB.take_for_agent(agent_node_id)
+            body = bytes([flags]) + mic
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if path.startswith("/api/nodes/") and path.endswith("/audio-mic"):
+            if not self.require_admin():
+                return
+            node_id = path[len("/api/nodes/"):-len("/audio-mic")]
+            node = node_by_id(node_id) if node_id and "/" not in node_id else None
+            if node is None:
+                self.send_json(404, {"error": "Noden hittades inte."})
+                return
+            if not ((node["status"] or {}).get("udp_audio") or {}).get("talk"):
+                self.send_json(409, {"error": "Noden har ingen UDP-ljudingång konfigurerad."})
+                return
+            if not node["online"]:
+                self.send_json(409, {"error": "Noden är offline."})
+                return
+            try:
+                body = self.read_binary_body(MAX_AUDIO_REQUEST_BYTES)
+            except ValueError as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            if not body:
+                self.send_json(400, {"error": "Begäran saknar innehåll."})
+                return
+            accepted, started, owner = AUDIO_HUB.push_mic(
+                node_id, self.actor, bool(body[0] & 1), body[1:]
+            )
+            if not accepted:
+                self.send_json(409, {"error": f"{owner} sänder redan via noden."})
+                return
+            if started:
+                with database() as connection:
+                    record_audit(connection, self.actor, "node.ptt", "Fjärrsändning startad",
+                                 node_id, node["name"])
+            self.send_json(200, {"ok": True})
+            return
+
         if path == "/api/v1/agent/radio":
-            node_id = self.authenticated_agent_id()
-            if node_id is None:
+            agent_node_id = self.authenticated_agent_id()
+            if agent_node_id is None:
                 self.send_json(401, {"error": "Ogiltig nodautentisering."})
                 return
             try:
@@ -2070,14 +2748,14 @@ class PortalHandler(BaseHTTPRequestHandler):
             except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
                 self.send_json(400, {"error": str(exc)})
                 return
-            RADIO_HUB.add_events(node_id, events)
-            touch_node(node_id)
-            self.send_json(200, {"ok": True, "watch": RADIO_HUB.watched(node_id)})
+            RADIO_HUB.add_events(agent_node_id, events)
+            touch_node(agent_node_id)
+            self.send_json(200, {"ok": True, "watch": RADIO_HUB.watched(agent_node_id)})
             return
 
         if path == "/api/v1/agent/logs":
-            node_id = self.authenticated_agent_id()
-            if node_id is None:
+            agent_node_id = self.authenticated_agent_id()
+            if agent_node_id is None:
                 self.send_json(401, {"error": "Ogiltig nodautentisering."})
                 return
             try:
@@ -2085,16 +2763,16 @@ class PortalHandler(BaseHTTPRequestHandler):
             except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
                 self.send_json(400, {"error": str(exc)})
                 return
-            LIVE_LOGS.add(node_id, lines)
-            touch_node(node_id)
+            LIVE_LOGS.add(agent_node_id, lines)
+            touch_node(agent_node_id)
             self.send_json(200, {"ok": True})
             return
 
         if path != "/api/v1/agent/status":
             self.send_json(404, {"error": "Endpoint hittades inte."})
             return
-        node_id = self.authenticated_agent_id()
-        if node_id is None:
+        agent_node_id = self.authenticated_agent_id()
+        if agent_node_id is None:
             self.send_json(401, {"error": "Ogiltig nodautentisering."})
             return
         try:
@@ -2103,27 +2781,28 @@ class PortalHandler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
             self.send_json(400, {"error": str(exc)})
             return
-        LIVE_LOGS.seed(node_id, status.get("logs") or [])
+        LIVE_LOGS.seed(agent_node_id, status.get("logs") or [])
         now = datetime.now(timezone.utc).isoformat()
         with database() as connection:
             connection.execute(
                 "UPDATE nodes SET status_json = ?, last_seen = ? WHERE id = ?",
-                (json.dumps(status, ensure_ascii=False), now, node_id),
+                (json.dumps(status, ensure_ascii=False), now, agent_node_id),
             )
         self.send_json(200, {
             "ok": True,
             "received_at": now,
-            "watch": RADIO_HUB.watched(node_id),
+            "watch": RADIO_HUB.watched(agent_node_id),
         })
 
 
-def serve():
+def serve() -> None:
     admin_credentials()
     with database():
         pass
     host = os.environ.get("PORTAL_HOST", "127.0.0.1")
     port = int(os.environ.get("PORTAL_PORT", "8080"))
     server = ThreadingHTTPServer((host, port), PortalHandler)
+    start_audio_udp()
     logging.info("Portal lyssnar på %s:%s.", host, port)
     try:
         server.serve_forever()
@@ -2133,7 +2812,7 @@ def serve():
         server.server_close()
 
 
-def main(argv=None):
+def main(argv: list[str] | None=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     provision_parser = subparsers.add_parser("provision-node", help="Skapa nodidentitet")

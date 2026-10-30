@@ -49,11 +49,18 @@
       <p id="create-node-error" class="error" role="status" aria-live="polite"></p>
       <section id="created-node" class="created-node" aria-labelledby="created-node-heading" hidden>
         <h3 id="created-node-heading">Nodidentitet skapad</h3>
-        <p class="muted">Spara uppgifterna säkert och ange dem i agentens installationsprompt. Den här token kan inte visas igen.</p>
+        <p class="muted">Spara uppgifterna säkert. Den här token kan inte visas igen.</p>
         <label for="created-node-id">Nod-ID</label>
         <input id="created-node-id" type="text" readonly>
         <label for="created-node-token">Engångstoken</label>
         <input id="created-node-token" type="text" readonly>
+        <div id="install-command-block" hidden>
+          <label for="created-node-command">Installationskommando för noden</label>
+          <textarea id="created-node-command" rows="4" readonly spellcheck="false"></textarea>
+          <button id="copy-install-command" type="button">Kopiera kommando</button>
+          <p class="muted">Kör kommandot på SvxLink-noden (kräver <code>git</code>, <code>curl</code> och sudo). Det innehåller nodens token, så skicka det bara krypterat och rensa shell-historiken efteråt.</p>
+        </div>
+        <p id="install-command-missing" class="muted" hidden>Ange portalens adress under Inställningar → Nodkonfig för att få ett färdigt installationskommando.</p>
       </section>
     </section>
     <dialog id="delete-node-dialog" aria-labelledby="delete-node-heading">

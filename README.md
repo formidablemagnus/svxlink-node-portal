@@ -21,7 +21,8 @@ independent version in `agent/VERSION`, which is reported by each node. When a
 release tag is pushed, the version workflow updates the agent version to match
 the tag only if agent code, its configuration helper, installer, or systemd
 unit changed since the previous tag. Portal-only releases leave the agent
-version unchanged.
+version unchanged. Tags containing `-dev` also update the agent version (when
+the agent changed), but only on `develop`; the portal version is left as is.
 
 The agent initiates every network request. A node does not need an inbound
 firewall rule or a public address. Each node has a unique, randomly generated
@@ -103,6 +104,25 @@ available) and run:
 sudo bash ./install.sh agent
 ```
 
+#### One-line install command
+
+Under **Inställningar → Nodkonfig** an admin saves the portal URL, the GitHub
+repository (`https://github.com/owner/repo`), branch/tag, SvxLink config and
+log paths and the report interval. Once the portal URL is set, **Lägg till nod**
+shows a ready-made command of the form
+`curl -fsSL <raw install.sh> | sudo env AGENT_PORTAL_URL=… AGENT_NODE_ID=… AGENT_TOKEN=… bash -s -- agent`.
+It clones the repository to a temporary directory and installs the agent
+without prompts. The node needs `git`, `curl`, `sudo` and `python3`. The
+command contains the token, so it ends up in shell history and the process
+list; it is only shown at creation, and the token can be rotated by creating a
+new node. Nodkonfig is not included in portal backups.
+
+The same non-interactive mode works manually with the variables
+`AGENT_PORTAL_URL`, `AGENT_NODE_ID`, `AGENT_TOKEN`, `AGENT_INTERVAL_SECONDS`,
+`SVXLINK_CONFIG`, `SVXLINK_LOGFILE`, `SVX_INSTALL_REPO` and `SVX_INSTALL_REF`.
+
+#### Interactive install
+
 The installer prompts for the portal HTTP or HTTPS URL, node ID and one-time
 token from `provision-node`, and the SvxLink config and log paths. SvxLink
 must already be installed; the agent runs as `svxlink` and needs read access to
@@ -121,13 +141,54 @@ its settings.
 
 On an online node's detail page, portal administrators can start or stop the
 `svxlink.service`. The latest log lines from the node are shown first. The agent
-installer grants the `svxlink` account sudo access only to the fixed
-configuration helper and `systemctl start/stop svxlink.service`; reinstall or
-update the agent role to install this rule.
+installer limits the `svxlink` account's sudo access to the fixed configuration
+and SvxLink-update helpers, SvxLink service controls, and the crontab operations
+used for schedules; reinstall or update the agent role to install these rules.
 
 The log panel can be filtered by free-text search (optionally as a regular
 expression) and by level (errors, warnings, other). Filtering happens in the
 browser on the lines already reported by the node.
+
+### Update SvxLink
+
+On a node's detail page, an administrator can choose **Pre-release (master)**
+or one of the four newest stable releases (the list shows their version
+numbers) and start an update. Pre-release builds use the
+latest `master` commit; stable builds use the chosen non-prerelease GitHub
+release tag. Both build a Debian package and restart `svxlink.service` after
+installation. The command and its result are recorded in the portal audit log.
+The agent reports when the update starts and sends a progress heartbeat every
+20 seconds. The node page shows the current status, disables node controls while
+the update runs, and the dashboard displays a spinner beside the SvxLink
+version. Builds can take several hours, so keep the node online and allow the
+command to finish.
+
+The installer creates a separate, non-login `svxlink-node-updater` account.
+It keeps its source checkout and CMake build directory in
+`/var/lib/svxlink-node-updater/svxlink`. On the first update it clones the
+official `sm0svx/svxlink` repository and configures the build with Qt disabled
+and Debian package generation enabled. The node needs internet access to
+GitHub and the same SvxLink compiler, library and documentation dependencies
+used for a source build (including `g++`, `cmake`, `make`, `git`, `curl`,
+`doxygen` and `groff`). Missing build dependencies or a failed build are
+reported in the node page; install the missing dependencies and retry.
+For Debian 12/Raspberry Pi OS, the upstream source-build guide lists these
+packages:
+
+```bash
+sudo apt install g++ cmake make libsigc++-2.0-dev libgsm1-dev libpopt-dev \
+  tcl-dev libgcrypt20-dev libspeex-dev libasound2-dev libopus-dev librtlsdr-dev \
+  doxygen groff alsa-utils vorbis-tools curl libcurl4-openssl-dev git rtl-sdr \
+  libjsoncpp-dev libgpiod-dev libssl-dev ladspa-sdk
+```
+
+The build runs as the separate, unprivileged updater account, not as the node
+agent. The installer grants the agent access to one root-owned helper with no
+command-line arguments; it accepts only the two channel choices. A transient
+systemd unit runs the fixed build workflow, validates the resulting SvxLink
+package, installs it with `dpkg`, and restarts the fixed SvxLink service.
+Installing a package executes its maintainer scripts as root, so only use this
+feature when you trust the selected upstream SvxLink source.
 
 ### Node information
 
@@ -151,8 +212,8 @@ edit configuration, node information, schedules or DTMF buttons, manage users, r
 log, or use backup/restore. Those controls are hidden for operators and the
 server rejects the requests with 403. Role `admin` can do everything.
 
-Every command sent to a node (DTMF sequence, service start/stop, configuration
-read/write, schedule read/write), node creation and user changes are recorded
+Every command sent to a node (DTMF sequence, service start/stop, SvxLink
+updates, configuration read/write, schedule read/write), node creation and user changes are recorded
 in the audit log with the acting user, time, node and outcome (queued,
 completed, failed, expired). Configuration contents are never logged, only the
 document name. The log keeps the latest 5000 entries; the DTMF sequences sent
@@ -216,6 +277,59 @@ portal node agent. Restart SvxLink after changing its configuration. If no
 `DTMF_CTRL_PTY` is configured for an active logic, that node's DTMF request
 will fail with an explanatory result. Nodes must be online and their agent
 must be polling the portal for queued commands to be delivered.
+
+### Remote operation over UDP audio
+
+When a node's `svxlink.conf` uses `AUDIO_DEV=udp:<address>:<port>` for the
+receiver and/or transmitter of an active logic, the agent reports this and the
+node page shows **Fjärrdrift (UDP-ljud)**. Click **Anslut ljud** to listen in
+the browser and hold **PTT** to transmit with your microphone (microphone
+access requires HTTPS or `localhost`). Audio is relayed through the portal's
+existing HTTP connection (16 kHz mono PCM), so no extra ports have to be opened
+towards the portal. Only one user can transmit at a time and every transmission
+start is written to the audit log.
+
+```ini
+[Rx1]
+AUDIO_DEV=udp:127.0.0.1:10000   # audio from the portal into SvxLink
+CARD_SAMPLE_RATE=48000
+SQL_DET=PTY                     # PTT: the agent writes O (open) / Z (close)
+SQL_PTY=/dev/shm/remote_ptt
+
+[Tx1]
+AUDIO_DEV=udp:127.0.0.1:10001   # audio from SvxLink to the agent
+CARD_SAMPLE_RATE=48000
+```
+
+The `[Tx]` address must be local to the node (for example `127.0.0.1`), since
+the agent receives the audio on that UDP port while a browser is connected. The
+`[Rx]` address is where SvxLink listens. The agent reads `CARD_SAMPLE_RATE` and
+`CARD_CHANNELS` from the `[Rx]`/`[Tx]` section, falling back to `[GLOBAL]`
+(defaults: 16000 Hz, 2 channels). Set `AGENT_UDP_CHANNELS=1` or `2` in
+`/etc/default/svxlink-node-agent` to override the channel count. PTT is
+released automatically if the browser stops sending, and after 3 minutes of
+continuous transmission. Without `SQL_DET=PTY` the audio is still delivered, so
+a VOX squelch can be used instead. Behind a reverse proxy, disable response
+buffering for `/api/nodes/*/audio` (the portal sends `X-Accel-Buffering: no`).
+
+**UDP transport between agent and portal.** By default the agent exchanges
+audio with the portal over HTTP, which stutters on high-latency or jittery
+links. When the portal and node share a direct network (for example
+Tailscale), enable the UDP transport by adding to
+`/etc/default/svxlink-node-portal` and restarting the portal:
+
+```
+PORTAL_AUDIO_UDP_PORT=10001
+```
+
+Allow that UDP port in the portal's firewall. The agent learns the port from
+the portal and sends to the host in `AGENT_PORTAL_URL`. If the URL points at a
+reverse proxy, set `AGENT_AUDIO_UDP_HOST` (and optionally
+`AGENT_AUDIO_UDP_PORT`) in `/etc/default/svxlink-node-agent` to the portal's
+own address. `AGENT_AUDIO_UDP=off` disables UDP on a node. Packets are
+authenticated with an HMAC derived from the node token but are not encrypted,
+so use a private or encrypted network. If the portal does not answer, the
+agent falls back to HTTP automatically and retries UDP after 10 minutes.
 
 Use `portal` or `agent` when installing on separate servers. If both roles
 should run on the same machine, use `sudo bash ./install.sh both` or run the

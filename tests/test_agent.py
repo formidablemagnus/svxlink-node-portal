@@ -2,6 +2,7 @@ import json
 import os
 import stat
 import tempfile
+import threading
 import unittest
 from urllib.error import URLError
 from pathlib import Path
@@ -11,9 +12,11 @@ from unittest.mock import patch
 from agent import version as agent_version
 from agent.agent import (
     CONFIG_HELPER,
+    UPDATE_HELPER,
     execute_config_command,
     execute_dtmf_command,
     execute_service_command,
+    execute_update_command,
     read_dtmf_control_paths,
     read_logic_info,
     validate_portal_url,
@@ -155,6 +158,61 @@ class AgentStatusTests(unittest.TestCase):
         self.assertEqual(result, helper_result)
         self.assertEqual(run_helper.call_args.args[0], ["sudo", "-n", CONFIG_HELPER])
         self.assertNotIn('"id"', run_helper.call_args.kwargs["input"].decode())
+
+    def test_update_command_runs_only_fixed_runner_for_allowed_channels(self):
+        command = {
+            "id": "a" * 32,
+            "action": "update",
+            "channel": "release",
+        }
+        expected = {"ok": True, "channel": "release", "version": "26.05.2"}
+        with patch(
+            "agent.agent.subprocess.run",
+            return_value=SimpleNamespace(
+                returncode=0,
+                stdout=(json.dumps(expected) + "\n").encode(),
+                stderr=b"",
+            ),
+        ) as run_update:
+            self.assertEqual(execute_update_command(command), expected)
+        self.assertEqual(run_update.call_args.args[0], ["sudo", "-n", UPDATE_HELPER])
+        self.assertEqual(
+            json.loads(run_update.call_args.kwargs["input"].decode()),
+            {"channel": "release"},
+        )
+
+    def test_update_command_reports_start_and_periodic_progress(self):
+        command = {"id": "a" * 32, "action": "update", "channel": "release"}
+        expected = {"ok": True, "channel": "release", "version": "26.05.2"}
+        stages = []
+
+        def finish_after_heartbeat(*args, **kwargs):
+            threading.Event().wait(0.05)
+            return SimpleNamespace(
+                returncode=0,
+                stdout=(json.dumps(expected) + "\n").encode(),
+                stderr=b"",
+            )
+
+        with patch("agent.agent.UPDATE_PROGRESS_INTERVAL_SECONDS", 0.01), patch(
+            "agent.agent.subprocess.run", side_effect=finish_after_heartbeat
+        ):
+            result = execute_update_command(command, stages.append)
+
+        self.assertEqual(result, expected)
+        self.assertEqual(stages[0], "starting")
+        self.assertIn("working", stages)
+
+    def test_update_command_rejects_untrusted_channel_before_running(self):
+        command = {
+            "id": "a" * 32,
+            "action": "update",
+            "channel": "main; id",
+        }
+        with patch("agent.agent.subprocess.run") as run_update:
+            with self.assertRaisesRegex(ValueError, "ogiltigt format"):
+                execute_update_command(command)
+        run_update.assert_not_called()
 
     def test_rejects_arbitrary_config_path_before_privilege_escalation(self):
         command = {

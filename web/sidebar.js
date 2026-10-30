@@ -1,9 +1,14 @@
+'use strict';
 // Gemensam vänstermeny. Alla sidor renderar menyn härifrån så att den är identisk överallt.
 (function () {
   // Sessionen har gått ut eller saknas: skicka användaren till inloggningssidan.
   const nativeFetch = window.fetch.bind(window);
   window.fetch = async (...args) => {
-    const response = await nativeFetch(...args);
+    const [input, init = {}] = args;
+    const response = await nativeFetch(input, {
+      ...init,
+      credentials: init.credentials || 'same-origin',
+    });
     if (response.status === 401 && !window.location.pathname.startsWith('/login')) {
       const here = window.location.pathname + window.location.search;
       window.location.replace(`/login?next=${encodeURIComponent(here)}`);
@@ -28,6 +33,7 @@
     unknown: `<svg ${SVG}><circle cx="12" cy="12" r="8"></circle><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg>`,
   };
 
+  /** @param {string} logic @returns {string} */
   function logicType(logic) {
     const value = String(logic || '').toLowerCase();
     if (value.includes('repeater')) return 'repeater';
@@ -38,6 +44,7 @@
   const ERROR_RE = /\b(error|fatal|critical|\*{3})\b|\bfel\b/i;
   const WARNING_RE = /\b(warn(ing)?|varning)\b/i;
 
+  /** @param {string} line @returns {string} */
   function logLevel(line) {
     if (ERROR_RE.test(line)) return 'error';
     if (WARNING_RE.test(line)) return 'warning';
@@ -51,6 +58,7 @@
     return window.location.pathname;
   }
 
+  /** @param {HTMLElement} aside @returns {void} */
   function buildSidebar(aside) {
     const active = aside.dataset.active;
     const brand = document.createElement('a');
@@ -108,6 +116,7 @@
     aside.replaceChildren(brand, nav, footer);
   }
 
+  /** @param {Array<Object>} nodes @returns {void} */
   function renderNodes(nodes) {
     const nav = document.getElementById('node-nav');
     nav.replaceChildren();
@@ -134,6 +143,7 @@
     }
   }
 
+  /** @returns {Promise<void>} */
   async function refreshNodes() {
     try {
       const response = await fetch('/api/nodes', {cache: 'no-store'});

@@ -1,3 +1,4 @@
+'use strict';
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
 })[char]);
@@ -17,16 +18,19 @@ const versionParts = (value) => (String(value || '').match(/\d+/g) || []).map(Nu
 const deleteNodeDialog = document.getElementById('delete-node-dialog');
 const deleteNodeForm = document.getElementById('delete-node-form');
 let pendingDeleteNodeId = null;
-function isOutdated(current, latest) {
+function compareVersions(current, latest) {
   const a = versionParts(current);
   const b = versionParts(latest);
-  if (!a.length || !b.length) return false;
+  if (!a.length || !b.length) return 0;
   for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
     const diff = (a[i] || 0) - (b[i] || 0);
-    if (diff) return diff < 0;
+    if (diff) return diff < 0 ? -1 : 1;
   }
-  return false;
+  return 0;
 }
+const isOutdated = (current, latest) => compareVersions(current, latest) < 0;
+const isPrerelease = (current, latest) => compareVersions(current, latest) > 0;
+/** @param {Array<Object>} nodes @param {string} latestSvxlink @param {boolean} canDeleteNodes @returns {void} */
 function renderNodes(nodes, latestSvxlink, canDeleteNodes) {
   const body = document.getElementById('nodes');
   const online = nodes.filter((node) => node.online);
@@ -69,14 +73,14 @@ function renderNodes(nodes, latestSvxlink, canDeleteNodes) {
     const logTitle = `Senaste loggrader: ${errorCount} fel, ${warningCount} varningar`;
     return `<tr>
       <td><strong><span class="node-icon ${node.online ? 'node-online' : 'node-offline'}" title="${esc(logic.LOGIC_TITLES[type])}" role="img" aria-label="${esc(logic.LOGIC_TITLES[type])}">${logic.ICONS[type]}</span> <a href="/nodes/${encodeURIComponent(node.id)}">${esc(node.name)}</a></strong>${status.callsign ? `<small>${esc(status.callsign)}</small>` : ''}</td>
-      <td><span class="status-badge ${node.online ? 'online' : 'offline'}">${node.online ? esc(SERVICE_LABELS[status.service_status] || status.service_status || 'Online') : 'Offline'}</span></td>
+      <td><span class="status-badge ${node.online ? 'online' : 'offline'}">${node.online ? 'Online' : 'Offline'}</span></td>
       <td><span class="status-badge ${serviceClass}" title="SvxLink-tjänst: ${esc(serviceLabel)}">${esc(serviceLabel)}</span></td>
       <td>${esc(radioNames[radio.mode] || 'Okänd')}</td>
       <td>${node.online && Number.isInteger(radio.signal_level) ? signalRing(radio.signal_level) : '—'}</td>
       <td>${status.current_tg ? `TG ${esc(status.current_tg)}` : 'Okänd'}</td>
-      <td><span class="status-badge ${logClass}" title="${esc(logTitle)}">${esc(logLabel)}</span></td>
+      <td>${node.online ? `<span class="status-badge ${logClass}" title="${esc(logTitle)}">${esc(logLabel)}</span>` : ''}</td>
       <td>${status.node_version ? `v${esc(status.node_version)}` : 'Okänd'}</td>
-      <td>${esc(status.svxlink_version || 'Okänd')}${isOutdated(status.svxlink_version, latestSvxlink) ? ` <a class="version-warning" href="https://github.com/sm0svx/svxlink" target="_blank" rel="noopener noreferrer" title="Ny SvxLink-version finns (${esc(latestSvxlink)})" aria-label="Ny SvxLink-version finns (${esc(latestSvxlink)})">&#9888;</a>` : ''}</td>
+      <td>${esc(status.svxlink_version || 'Okänd')}${node.update ? ` <span class="update-spinner" role="img" aria-label="SvxLink-uppdatering pågår" title="${esc(node.update.progress?.message || 'SvxLink-uppdatering pågår')}"></span>` : ''}${isOutdated(status.svxlink_version, latestSvxlink) ? ` <a class="version-warning" href="https://github.com/sm0svx/svxlink" target="_blank" rel="noopener noreferrer" title="Ny SvxLink-version finns (${esc(latestSvxlink)})" aria-label="Ny SvxLink-version finns (${esc(latestSvxlink)})">&#9888;</a>` : ''}${isPrerelease(status.svxlink_version, latestSvxlink) ? ` <span class="prerelease-marker" role="img" title="Pre-release, nyare än senaste stabila release (${esc(latestSvxlink)})" aria-label="Pre-release, nyare än senaste stabila release (${esc(latestSvxlink)})"><svg viewBox="0 0 20 18" width="18" height="16" aria-hidden="true"><path d="M10 1.5 19 16.5H1Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><text x="10" y="14" text-anchor="middle" font-size="9" font-weight="700" fill="currentColor">B</text></svg></span>` : ''}</td>
       <td>${esc(lastSeen)}</td>
       <td>${canDeleteNodes ? `<a class="node-settings" href="/nodes/${encodeURIComponent(node.id)}/config" aria-label="Redigera konfiguration för ${esc(node.name)}" title="Redigera konfiguration">
         <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .33 1.82l.06.06-1.65 2.86-.08-.03a1.65 1.65 0 0 0-1.82.34l-.06.06h-3.3l-.04-.08a1.65 1.65 0 0 0-1.82-.33l-.08.03-2.86-1.65.03-.08a1.65 1.65 0 0 0-.34-1.82l-.06-.06v-3.3l.08-.04a1.65 1.65 0 0 0 .33-1.82l-.03-.08 1.65-2.86.08.03a1.65 1.65 0 0 0 1.82-.34l.06-.06h3.3l.04.08a1.65 1.65 0 0 0 1.82.33l.08-.03 2.86 1.65-.03.08a1.65 1.65 0 0 0 .34 1.82l.06.06v3.3z"></path></svg>
@@ -98,6 +102,7 @@ function renderNodes(nodes, latestSvxlink, canDeleteNodes) {
   }
 }
 let refreshing = false;
+/** @returns {Promise<void>} */
 async function refresh() {
   if (refreshing || document.hidden) return;
   refreshing = true;
@@ -164,6 +169,10 @@ document.getElementById('create-node-form').addEventListener('submit', async (ev
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     document.getElementById('created-node-id').value = data.node_id;
     document.getElementById('created-node-token').value = data.token;
+    const command = data.install_command || '';
+    document.getElementById('created-node-command').value = command;
+    document.getElementById('install-command-block').hidden = !command;
+    document.getElementById('install-command-missing').hidden = Boolean(command);
     result.hidden = false;
     form.reset();
     refresh();
@@ -172,6 +181,18 @@ document.getElementById('create-node-form').addEventListener('submit', async (ev
   } finally {
     button.disabled = false;
   }
+});
+document.getElementById('copy-install-command').addEventListener('click', async (event) => {
+  const field = document.getElementById('created-node-command');
+  const button = event.currentTarget;
+  try {
+    await navigator.clipboard.writeText(field.value);
+    button.textContent = 'Kopierat';
+  } catch (cause) {
+    field.select();
+    button.textContent = 'Markerat – tryck Ctrl+C';
+  }
+  setTimeout(() => { button.textContent = 'Kopiera kommando'; }, 3000);
 });
 refresh();
 setInterval(refresh, 1500);

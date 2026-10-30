@@ -1,3 +1,4 @@
+'use strict';
 const nodeId = window.location.pathname.split('/').filter(Boolean).pop();
 const setText = (id, value) => { document.getElementById(id).textContent = value; };
 const SERVICE_LABELS = {
@@ -18,6 +19,11 @@ const serviceStopButton = document.getElementById('service-stop');
 const serviceRestartButton = document.getElementById('service-restart');
 const serviceCommandStatus = document.getElementById('service-command-status');
 let serviceCommandRunning = false;
+const updateStartButton = document.getElementById('update-start');
+const updateChannel = document.getElementById('update-channel');
+const updateCommandStatus = document.getElementById('update-command-status');
+let updateRunning = false;
+let nodeUpdate = null;
 let nodeOnline = false;
 let serviceActive = null;
 let serviceStatusExpected = null;
@@ -25,10 +31,14 @@ const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, mill
 
 function updateServiceControls() {
   const waitingForStatus = serviceStatusExpected !== null;
-  serviceStartButton.disabled = !nodeOnline || serviceCommandRunning || waitingForStatus || serviceActive !== false;
-  serviceStopButton.disabled = !nodeOnline || serviceCommandRunning || waitingForStatus || serviceActive !== true;
-    serviceRestartButton.disabled = serviceStopButton.disabled;
-  }
+  const updateActive = nodeUpdate?.status === 'pending' || nodeUpdate?.status === 'in_progress';
+  const serviceDisabled = !nodeOnline || serviceCommandRunning || updateRunning || updateActive || waitingForStatus;
+  serviceStartButton.disabled = serviceDisabled || serviceActive !== false;
+  serviceStopButton.disabled = serviceDisabled || serviceActive !== true;
+  serviceRestartButton.disabled = serviceStopButton.disabled;
+  updateChannel.disabled = updateRunning || updateActive;
+  updateStartButton.disabled = !nodeOnline || serviceCommandRunning || updateRunning || updateActive;
+}
 
 function renderRadio(radio) {
   for (const [key, label, activeText, activeClass] of [['tx', 'TX', 'sänder', 'radio-tx'], ['rx', 'RX', 'tar emot', 'radio-rx']]) {
@@ -204,9 +214,11 @@ function renderNodeInfo(info) {
   }
 }
 
+/** @param {Object} node @returns {void} */
 function renderNode(node) {
   const status = node.status || {};
   const radio = status.radio || {};
+  nodeUpdate = node.update;
   const lastSeen = node.last_seen ? new Date(node.last_seen).toLocaleString('sv-SE') : 'Aldrig';
   setText('node-name', node.name);
   setText('node-callsign', status.callsign || 'Lokal SvxLink-status från nodagenten');
@@ -217,7 +229,7 @@ function renderNode(node) {
     el.setAttribute('aria-label', label);
   };
   setDot('online', node.online, `Nodanslutning: ${node.online ? 'online' : 'offline'}`);
-  if (!node.online && status.active === true) {
+  if (!node.online) {
     setDot('service', 'unknown', 'SvxLink-tjänst: okänd (noden är offline)');
   } else {
     setDot('service', status.active === true, `SvxLink-tjänst: ${status.active === true ? 'igång' : (status.service_status || 'avstängd/okänd')}`);
@@ -230,32 +242,48 @@ function renderNode(node) {
   setText('monitor-tgs', Array.isArray(status.monitor_tgs) && status.monitor_tgs.length ? status.monitor_tgs.join(', ') : 'Inga');
   setText('pty-checks', (status.pty_checks || []).map((check) => check.reason).filter(Boolean).join(' '));
   setText('logic', status.logic || 'Okänd');
+  if (window.SvxAudio) window.SvxAudio.update(status.udp_audio, node.online);
   setText('callsign', status.callsign || 'Okänd');
-  setText('service-status', SERVICE_LABELS[status.service_status] || status.service_status || 'Okänd');
+  setText('service-status', node.online
+    ? SERVICE_LABELS[status.service_status] || status.service_status || 'Okänd'
+    : 'Okänd');
   setText('last-seen', lastSeen);
   setText('node-id', node.id);
   nodeOnline = Boolean(node.online);
   serviceActive = typeof status.active === 'boolean' ? status.active : null;
   if (serviceActive === serviceStatusExpected) serviceStatusExpected = null;
   updateServiceControls();
+  if (nodeUpdate) {
+    updateCommandStatus.textContent = nodeUpdate.progress?.message
+      || (nodeUpdate.status === 'pending'
+        ? 'Uppdateringen väntar på nodagenten…'
+        : 'SvxLink-uppdateringen pågår…');
+  }
   allLogs = Array.isArray(status.logs) ? status.logs : [];
   renderNodeInfo(status.node_info);
   renderLogs();
-  dtmfButton.disabled = !node.online || dtmfSending;
-  setPresetsDisabled(!node.online || dtmfSending);
+  dtmfInput.disabled = Boolean(nodeUpdate);
+  dtmfButton.disabled = !node.online || dtmfSending || Boolean(nodeUpdate);
+  setPresetsDisabled(!node.online || dtmfSending || Boolean(nodeUpdate));
   document.getElementById('error').textContent = node.online
     ? ''
     : 'Noden är offline. Visade statusvärden kommer från den senaste rapporten.';
   document.getElementById('updated').textContent = `Uppdaterad ${new Date().toLocaleTimeString('sv-SE')}`;
 }
 
-async function waitForCommand(commandId, successMessage, failureMessage) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    await wait(1000);
+/** @param {string} commandId @param {string|function(Object):string} successMessage @param {string} failureMessage @returns {Promise<string>} */
+async function waitForCommand(commandId, successMessage, failureMessage, maxAttempts = 60, pollInterval = 1000, onProgress = null) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await wait(pollInterval);
     const response = await fetch(`/api/commands/${encodeURIComponent(commandId)}`, {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const result = await response.json();
-    if (result.status === 'completed') return successMessage;
+    if (result.status === 'in_progress' && result.progress?.message && onProgress) {
+      onProgress(result.progress);
+    }
+    if (result.status === 'completed') {
+      return typeof successMessage === 'function' ? successMessage(result.result) : successMessage;
+    }
     if (result.status === 'failed') throw new Error(result.result?.error || failureMessage);
     if (result.status === 'expired') throw new Error('Åtgärden hann löpa ut innan nodagenten tog emot den.');
   }
@@ -312,6 +340,68 @@ serviceStartButton.addEventListener('click', () => controlService('start'));
 serviceStopButton.addEventListener('click', () => controlService('stop'));
 serviceRestartButton.addEventListener('click', () => controlService('restart'));
 
+const updateLabel = (channel) => {
+  if (channel === 'prerelease') return 'senaste pre-release';
+  if (channel === 'release') return 'senaste stabila release';
+  return `release ${channel}`;
+};
+
+async function loadUpdateVersions() {
+  try {
+    const response = await fetch('/api/svxlink-releases');
+    if (!response.ok) return;
+    const releases = (await response.json()).releases;
+    if (!Array.isArray(releases) || !releases.length) return;
+    const previous = updateChannel.value;
+    updateChannel.replaceChildren(new Option('Pre-release (master)', 'prerelease'));
+    releases.forEach((tag, index) => {
+      updateChannel.add(new Option(index === 0 ? `${tag} (senaste stabila release)` : tag, tag));
+    });
+    if ([...updateChannel.options].some((option) => option.value === previous)) updateChannel.value = previous;
+  } catch (error) {
+    // Kvar med standardalternativen om listan inte kan hämtas.
+  }
+}
+loadUpdateVersions();
+
+/** @returns {Promise<void>} */
+async function updateSvxLink() {
+  const channel = updateChannel.value;
+  const labels = {[channel]: updateLabel(channel)};
+  if (!window.confirm(
+    `Starta uppdatering till ${labels[channel]}? SvxLink byggs och installeras, och nodens SvxLink-tjänst startas om.`
+  )) return;
+
+  updateRunning = true;
+  updateServiceControls();
+  updateCommandStatus.textContent = `Hämtar och bygger ${labels[channel]}. Det kan ta flera timmar…`;
+  try {
+    const response = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}/update-commands`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({channel})
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    const message = await waitForCommand(
+      data.command_id,
+      (result) => `SvxLink ${result.version} installerades via ${updateLabel(result.channel)}.`,
+      'Uppdateringen misslyckades.',
+      5400,
+      3000,
+      (progress) => { updateCommandStatus.textContent = progress.message; }
+    );
+    updateCommandStatus.textContent = message;
+  } catch (error) {
+    updateCommandStatus.textContent = `SvxLink kunde inte uppdateras: ${error.message}`;
+  } finally {
+    updateRunning = false;
+    updateServiceControls();
+  }
+}
+
+updateStartButton.addEventListener('click', updateSvxLink);
+
 const presetContainer = document.getElementById('dtmf-presets');
 const reflectorContainer = document.getElementById('reflector-tgs');
 let currentTg = '';
@@ -364,6 +454,7 @@ function startReflectorStream() {
       setText('reflector-updated', 'Kunde inte läsa reflektorströmmen.');
     }
   });
+  source.onerror = () => setText('reflector-updated', 'Återansluter till reflektorströmmen…');
 }
 
 function setPresetsDisabled(disabled) {
@@ -428,6 +519,7 @@ async function loadPresets() {
   }
 }
 
+/** @returns {Promise<Object|null>} */
 async function refresh() {
   try {
     const response = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}`, {cache: 'no-store'});

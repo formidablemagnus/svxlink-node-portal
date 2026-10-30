@@ -1,3 +1,4 @@
+'use strict';
 // Formulär för node_info.json. Textarean är källan till sanning; formuläret
 // speglar den och skriver tillbaka JSON vid varje ändring.
 (function () {
@@ -326,5 +327,6 @@
   textarea.addEventListener('input', refresh);
   tabs.forEach((t) => t.addEventListener('click', () => setView(t.dataset.nodeInfoView)));
   setView('form');
+  /** @type {{refresh: () => void, validate: () => Array<string>}} */
   window.NodeInfoForm = {refresh, validate: () => { refresh(); return validate(); }};
 })();

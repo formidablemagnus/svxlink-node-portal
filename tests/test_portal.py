@@ -5,7 +5,7 @@ import os
 import tempfile
 import threading
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -17,11 +17,15 @@ from portal.server import (
     PortalHandler,
     _login_failures,
     claim_agent_commands,
+    active_update_statuses,
     complete_agent_command,
     create_backup,
     database,
+    enqueue_agent_command,
+    hash_password,
     provision_node,
     restore_backup,
+    take_agent_command_result,
     validate_dtmf_command,
     validate_status,
 )
@@ -311,8 +315,8 @@ class PortalStatusTests(unittest.TestCase):
             try:
                 base_url = f"http://127.0.0.1:{server.server_port}"
                 report = {
-                    "active": True,
-                    "service_status": "active",
+                    "active": False,
+                    "service_status": "inactive",
                     "current_tg": "240",
                     "logic": "RepeaterLogic",
                     "callsign": "SA7TEST",
@@ -354,6 +358,11 @@ class PortalStatusTests(unittest.TestCase):
                     dashboard = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(dashboard["nodes"][0]["name"], "Test node")
                 self.assertTrue(dashboard["nodes"][0]["online"])
+                self.assertFalse(dashboard["nodes"][0]["status"]["active"])
+                self.assertEqual(
+                    dashboard["nodes"][0]["status"]["service_status"],
+                    "inactive",
+                )
                 self.assertEqual(dashboard["nodes"][0]["status"]["radio"]["mode"], "rx")
 
                 detail_request = Request(
@@ -369,6 +378,35 @@ class PortalStatusTests(unittest.TestCase):
                     detail["status"]["logs"],
                     ["SvxLink started", "Selecting TG 240"],
                 )
+
+                with database() as connection:
+                    connection.execute(
+                        "UPDATE nodes SET last_seen = ? WHERE id = ?",
+                        ("2000-01-01T00:00:00+00:00", node["node_id"]),
+                    )
+
+                with urlopen(dashboard_request, timeout=2) as response:
+                    dashboard = json.loads(response.read().decode("utf-8"))
+                offline_status = dashboard["nodes"][0]["status"]
+                self.assertFalse(dashboard["nodes"][0]["online"])
+                self.assertIsNone(offline_status["active"])
+                self.assertEqual(offline_status["service_status"], "unknown")
+                self.assertIsNone(offline_status["current_tg"])
+                self.assertEqual(offline_status["logs"], [])
+
+                with urlopen(detail_request, timeout=2) as response:
+                    detail = json.loads(response.read().decode("utf-8"))["node"]
+                self.assertFalse(detail["online"])
+                self.assertIsNone(detail["status"]["active"])
+                self.assertEqual(detail["status"]["service_status"], "unknown")
+                self.assertIsNone(detail["status"]["current_tg"])
+                self.assertEqual(detail["status"]["logs"], [])
+
+                with database() as connection:
+                    connection.execute(
+                        "UPDATE nodes SET last_seen = ? WHERE id = ?",
+                        ("2999-01-01T00:00:00+00:00", node["node_id"]),
+                    )
 
                 page_request = Request(
                     f"{base_url}/nodes/{node['node_id']}",
@@ -395,6 +433,10 @@ class PortalStatusTests(unittest.TestCase):
                 )
                 self.assertIn("/config\" aria-label=\"Redigera konfiguration för", dashboard_script)
                 self.assertIn("title=\"Redigera konfiguration\"", dashboard_script)
+                self.assertIn(
+                    "${node.online ? 'Online' : 'Offline'}",
+                    dashboard_script,
+                )
 
                 config_page_request = Request(
                     f"{base_url}/nodes/{node['node_id']}/config",
@@ -521,6 +563,25 @@ class PortalStatusTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=2)
+
+
+class ReflectorMergeTests(unittest.TestCase):
+    def test_nodes_and_talkgroups_are_summed_across_reflectors(self):
+        from portal.reflector import merge_states, summarize_nodes
+
+        def state(nodes):
+            return {"ok": True, "connected": True, "error": None,
+                    "updated_at": 1, **summarize_nodes(nodes)}
+
+        merged = merge_states([
+            state({"A": {"tg": 240, "isTalker": True}, "B": {"tg": 2400}}),
+            state({"C": {"tg": 240}, "D": {"tg": 5, "hidden": True}}),
+        ])
+        self.assertEqual(merged["node_count"], 3)
+        self.assertEqual(
+            merged["talkgroups"],
+            [{"tg": 240, "nodes": 2, "talkers": 1}, {"tg": 2400, "nodes": 1, "talkers": 0}],
+        )
 
 
 class PortalRadioStreamTests(unittest.TestCase):
@@ -742,6 +803,252 @@ class PortalServiceCommandTests(unittest.TestCase):
                 self.assertIn('id="service-restart"', detail_page)
                 self.assertIn("Du kan nu starta den.", node_script)
                 self.assertIn("Du kan nu stänga av den.", node_script)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+
+class PortalUpdateCommandTests(unittest.TestCase):
+    def test_update_command_is_admin_only_and_keeps_a_long_build_alive(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {
+                "PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3"),
+                "PORTAL_ADMIN_USER": "admin",
+                "PORTAL_ADMIN_PASSWORD": "this-is-a-long-test-password",
+            },
+        ):
+            node = provision_node("Update node")
+            with database() as connection:
+                connection.execute(
+                    "UPDATE nodes SET last_seen = ? WHERE id = ?",
+                    ("2999-01-01T00:00:00+00:00", node["node_id"]),
+                )
+                connection.execute(
+                    "INSERT INTO portal_users (username, password_hash, role, created_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (
+                        "operator",
+                        hash_password("Operator-password-1"),
+                        "operator",
+                        "2025-01-01T00:00:00+00:00",
+                    ),
+                )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://127.0.0.1:{server.server_port}"
+                admin_credentials = base64.b64encode(
+                    b"admin:this-is-a-long-test-password"
+                ).decode()
+                admin_headers = {
+                    **session_header(base_url, admin_credentials),
+                    "Content-Type": "application/json",
+                }
+                operator_credentials = base64.b64encode(
+                    b"operator:Operator-password-1"
+                ).decode()
+                operator_headers = {
+                    **session_header(base_url, operator_credentials),
+                    "Content-Type": "application/json",
+                }
+                endpoint = f"{base_url}/api/nodes/{node['node_id']}/update-commands"
+                with self.assertRaises(HTTPError) as invalid_channel:
+                    urlopen(
+                        Request(
+                            endpoint,
+                            data=json.dumps({"channel": "master"}).encode(),
+                            headers=admin_headers,
+                        ),
+                        timeout=2,
+                    )
+                self.assertEqual(invalid_channel.exception.code, 400)
+                from portal.server import validate_update_command
+                self.assertEqual(
+                    validate_update_command({"action": "update", "channel": "26.05.1"})["channel"],
+                    "26.05.1",
+                )
+                for bad in ("26.05.1; rm", "../x", "26", ""):
+                    with self.assertRaises(ValueError):
+                        validate_update_command({"action": "update", "channel": bad})
+                with self.assertRaises(HTTPError) as forbidden:
+                    urlopen(
+                        Request(
+                            endpoint,
+                            data=json.dumps({"channel": "release"}).encode(),
+                            headers=operator_headers,
+                        ),
+                        timeout=2,
+                    )
+                self.assertEqual(forbidden.exception.code, 403)
+
+                with urlopen(
+                    Request(
+                        endpoint,
+                        data=json.dumps({"channel": "release"}).encode(),
+                        headers=admin_headers,
+                    ),
+                    timeout=2,
+                ) as response:
+                    command_id = json.loads(response.read())["command_id"]
+                self.assertEqual(
+                    claim_agent_commands(node["node_id"]),
+                    [{
+                        "id": command_id,
+                        "action": "update",
+                        "channel": "release",
+                    }],
+                )
+                agent_headers = {
+                    "Authorization": "Bearer " + node["token"],
+                    "Content-Type": "application/json",
+                }
+                with urlopen(
+                    Request(
+                        f"{base_url}/api/v1/agent/commands/{command_id}/progress",
+                        data=json.dumps({"stage": "starting"}).encode(),
+                        headers=agent_headers,
+                    ),
+                    timeout=2,
+                ) as response:
+                    self.assertEqual(response.status, 200)
+                progress = take_agent_command_result(command_id)
+                self.assertEqual(progress["status"], "in_progress")
+                self.assertEqual(progress["progress"]["stage"], "starting")
+                self.assertEqual(
+                    progress["progress"]["message"],
+                    "Uppdateringen har startat.",
+                )
+                with urlopen(
+                    Request(
+                        f"{base_url}/api/nodes/{node['node_id']}",
+                        headers={**session_header(base_url, admin_credentials)},
+                    ),
+                    timeout=2,
+                ) as response:
+                    node_status = json.loads(response.read())["node"]
+                self.assertEqual(node_status["update"]["status"], "in_progress")
+                self.assertEqual(
+                    node_status["update"]["progress"]["stage"],
+                    "starting",
+                )
+                with urlopen(
+                    Request(
+                        f"{base_url}/api/nodes",
+                        headers={**session_header(base_url, admin_credentials)},
+                    ),
+                    timeout=2,
+                ) as response:
+                    dashboard = json.loads(response.read())["nodes"]
+                self.assertEqual(dashboard[0]["update"]["status"], "in_progress")
+                dashboard_script = fetch_asset(
+                    base_url,
+                    session_header(base_url, admin_credentials),
+                    "index.js",
+                )
+                self.assertIn("update-spinner", dashboard_script)
+                node_script = fetch_asset(
+                    base_url,
+                    session_header(base_url, admin_credentials),
+                    "node.js",
+                )
+                self.assertIn("nodeUpdate?.status", node_script)
+                with self.assertRaises(HTTPError) as duplicate_update:
+                    urlopen(
+                        Request(
+                            endpoint,
+                            data=json.dumps({"channel": "release"}).encode(),
+                            headers=admin_headers,
+                        ),
+                        timeout=2,
+                    )
+                self.assertEqual(duplicate_update.exception.code, 409)
+
+                old = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+                recent = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+                with database() as connection:
+                    connection.execute(
+                        "UPDATE agent_commands SET created_at = ?, updated_at = ? WHERE id = ?",
+                        (old, recent, command_id),
+                    )
+                self.assertEqual(claim_agent_commands(node["node_id"]), [])
+                self.assertEqual(
+                    take_agent_command_result(command_id)["status"],
+                    "in_progress",
+                )
+                with self.assertRaisesRegex(RuntimeError, "Noden uppdateras"):
+                    enqueue_agent_command(
+                        node["node_id"],
+                        {"action": "service", "operation": "restart"},
+                        "admin",
+                    )
+                self.assertEqual(claim_agent_commands(node["node_id"]), [])
+                self.assertTrue(complete_agent_command(
+                    node["node_id"],
+                    command_id,
+                    {"ok": True, "channel": "release", "version": "26.05.2"},
+                ))
+                self.assertEqual(
+                    take_agent_command_result(command_id),
+                    {
+                        "status": "completed",
+                        "result": {"ok": True, "channel": "release", "version": "26.05.2"},
+                    },
+                )
+                service_id = enqueue_agent_command(
+                    node["node_id"],
+                    {"action": "service", "operation": "restart"},
+                    "admin",
+                )
+                self.assertEqual(
+                    claim_agent_commands(node["node_id"]),
+                    [{"id": service_id, "action": "service", "operation": "restart"}],
+                )
+                self.assertTrue(complete_agent_command(
+                    node["node_id"], service_id, {"ok": True}
+                ))
+                stalled_id = enqueue_agent_command(
+                    node["node_id"], {"action": "update", "channel": "release"}, "admin"
+                )
+                self.assertEqual(len(claim_agent_commands(node["node_id"])), 1)
+                silent = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+                with database() as connection:
+                    connection.execute(
+                        "UPDATE agent_commands SET updated_at = ? WHERE id = ?",
+                        (silent, stalled_id),
+                    )
+                with database() as connection:
+                    self.assertEqual(active_update_statuses(connection), {})
+                self.assertEqual(take_agent_command_result(stalled_id)["status"], "expired")
+                with urlopen(
+                    Request(
+                        f"{base_url}/api/audit",
+                        headers={**session_header(base_url, admin_credentials)},
+                    ),
+                    timeout=2,
+                ) as response:
+                    updates = [
+                        entry for entry in json.loads(response.read())["entries"]
+                        if entry["action"] == "update"
+                    ]
+                self.assertEqual(
+                    (updates[1]["detail"], updates[1]["outcome"]),
+                    ("release", "completed"),
+                )
+                with urlopen(
+                    Request(
+                        f"{base_url}/nodes/{node['node_id']}",
+                        headers={**session_header(base_url, admin_credentials)},
+                    ),
+                    timeout=2,
+                ) as response:
+                    self.assertIn('id="update-start"', response.read().decode("utf-8"))
+                self.assertIn(
+                    "/update-commands",
+                    fetch_asset(base_url, session_header(base_url, admin_credentials), "node.js"),
+                )
             finally:
                 server.shutdown()
                 server.server_close()
@@ -1096,8 +1403,9 @@ class PortalUserAndAuditTests(unittest.TestCase):
                 self.assertEqual(status(*admin, node_path, {"password": "wrong-password"}, "DELETE"), 403)
                 with database() as connection:
                     connection.execute(
-                        "UPDATE nodes SET last_seen = ? WHERE id = ?",
-                        (datetime.now(timezone.utc).isoformat(), node["node_id"]),
+                        "UPDATE nodes SET last_seen = ?, status_json = ? WHERE id = ?",
+                        (datetime.now(timezone.utc).isoformat(),
+                         json.dumps({"active": True}), node["node_id"]),
                     )
                 queued = call(*operator, f"/api/nodes/{node['node_id']}/dtmf-commands",
                               {"sequence": "91240#"})
@@ -1137,6 +1445,110 @@ class PortalUserAndAuditTests(unittest.TestCase):
                 )
                 call(*admin, "/api/users/olle", method="DELETE")
                 self.assertEqual(status(*operator, "/api/me"), 401)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+
+class PortalNodeConfigTests(unittest.TestCase):
+    def test_node_config_and_install_command(self):
+        import shlex
+
+        password = "this-is-a-long-test-password"
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {
+                "PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3"),
+                "PORTAL_ADMIN_USER": "admin",
+                "PORTAL_ADMIN_PASSWORD": password,
+            },
+        ):
+            server = ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f"http://127.0.0.1:{server.server_port}"
+                cookie = login_cookie(base, "admin", password)
+
+                def call(path, body=None, cookie=cookie):
+                    request = Request(
+                        base + path,
+                        data=json.dumps(body).encode() if body is not None else None,
+                        headers={"Cookie": cookie, "Content-Type": "application/json"},
+                    )
+                    with urlopen(request, timeout=3) as response:
+                        return response.status, json.loads(response.read())
+
+                def status(path, body=None, cookie=cookie):
+                    with self.assertRaises(HTTPError) as error:
+                        call(path, body, cookie)
+                    return error.exception.code
+
+                code, data = call("/api/node-config")
+                config = data["config"]
+                self.assertEqual((code, config["portal_url"], config["repo_ref"]), (200, "", "main"))
+
+                # Utan portaladress finns inget färdigt kommando.
+                _, created = call("/api/nodes", {"name": "Utan adress"})
+                self.assertIsNone(created["install_command"])
+
+                config.update(
+                    portal_url="https://portal.example.net/",
+                    repo_ref="develop",
+                    interval_seconds=7,
+                )
+                _, saved = call("/api/node-config", config)
+                self.assertEqual(saved["config"]["portal_url"], "https://portal.example.net")
+                self.assertEqual(call("/api/node-config")[1]["config"], saved["config"])
+
+                _, created = call("/api/nodes", {"name": "Med adress"})
+                command = created["install_command"]
+                self.assertTrue(command.startswith(
+                    "curl -fsSL https://raw.githubusercontent.com/formidablemagnus/"
+                    "svxlink-node-portal/develop/install.sh | sudo env "
+                ))
+                self.assertTrue(command.endswith(" bash -s -- agent"))
+                words = shlex.split(command.split("| sudo env ", 1)[1])
+                values = dict(word.split("=", 1) for word in words if "=" in word)
+                self.assertEqual(values["AGENT_NODE_ID"], created["node_id"])
+                self.assertEqual(values["AGENT_TOKEN"], created["token"])
+                self.assertEqual(values["AGENT_PORTAL_URL"], "https://portal.example.net")
+                self.assertEqual(values["AGENT_INTERVAL_SECONDS"], "7")
+                self.assertEqual(values["SVX_INSTALL_REF"], "develop")
+                self.assertEqual(
+                    values["SVX_INSTALL_REPO"],
+                    "https://github.com/formidablemagnus/svxlink-node-portal.git",
+                )
+
+                bad_values = {
+                    "portal_url": ["ftp://x.example", "https://u:p@x.example", "https://x.example/?q=1",
+                                   "https://x.example/'; reboot #", "javascript:alert(1)"],
+                    "repo_url": ["https://example.com/a/b", "https://github.com/a", "git@github.com:a/b.git"],
+                    "repo_ref": ["-x", "a b", "a;b", "../x", "x/", "$(id)"],
+                    "svxlink_config": ["relative.conf", "/etc/../x", "/etc/a b", "/etc/$HOME"],
+                    "svxlink_logfile": ["/var/log/a;b", ""],
+                    "interval_seconds": [0, 3601, "5", True, None],
+                }
+                for key, values_list in bad_values.items():
+                    for value in values_list:
+                        self.assertEqual(status("/api/node-config", {**saved["config"], key: value}), 400,
+                                         (key, value))
+                self.assertEqual(status("/api/node-config", {"portal_url": "https://a.example"}), 400)
+
+                call("/api/users", {"username": "olle", "password": "Operator-password-1",
+                                    "role": "operator"})
+                operator = login_cookie(base, "olle", "Operator-password-1")
+                self.assertEqual(status("/api/node-config", cookie=operator), 403)
+                self.assertEqual(status("/api/node-config", saved["config"], cookie=operator), 403)
+                actions = [e["action"] for e in call("/api/audit")[1]["entries"]]
+                self.assertIn("node-config.update", actions)
+
+                headers = {"Cookie": cookie}
+                self.assertIn("nodeconfig-panel", urlopen(
+                    Request(f"{base}/admin", headers=headers), timeout=2).read().decode())
+                self.assertIn("install_command", fetch_asset(base, headers, "index.js"))
+                self.assertIn("/api/node-config", fetch_asset(base, headers, "admin.js"))
             finally:
                 server.shutdown()
                 server.server_close()

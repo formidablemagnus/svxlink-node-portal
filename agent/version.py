@@ -1,10 +1,12 @@
 """Read the agent version from its own VERSION file."""
+from __future__ import annotations
+
 from pathlib import Path
 
-VERSION_FILE = Path(__file__).resolve().parent / "VERSION"
+VERSION_FILE: Path = Path(__file__).resolve().parent / "VERSION"
 
 
-def read_version():
+def read_version() -> str:
     try:
         return VERSION_FILE.read_text(encoding="utf-8").strip()[:64] or "okänd"
     except (OSError, UnicodeError):
