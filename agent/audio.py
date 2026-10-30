@@ -28,7 +28,9 @@ UDP_EXCHANGE_SECONDS = 0.02
 MAX_CONSECUTIVE_FAILURES = 5
 MAX_PTT_SECONDS = 180
 PTT_DRAIN_SECONDS = 0.3
-UPLINK_QUEUE_FRAMES = 25
+UPLINK_QUEUE_FRAMES = 40
+UPLINK_PREBUFFER_FRAMES = 8
+UPLINK_PREBUFFER_MAX_SECONDS = 0.3
 UPLINK_SILENCE_TAIL_SECONDS = 4.0
 SQUELCH_OPEN = b"O"
 SQUELCH_CLOSE = b"Z"
@@ -380,23 +382,46 @@ class AudioBridge:
         return b"".join(chunks)
 
     def _uplink_sender(self, sender, address, frames, stop, silence=b""):
-        # SvxLinks VOX stänger bara när det kommer tystnad; utan paket står
-        # ljudenheten still och squelchen blir kvar öppen. Därför skickas
-        # tystnad en stund efter sista mikrofonramen.
+        # Jitterbuffert: webbläsaren levererar ljud i skurar, så uppspelningen
+        # startar först när några ramar finns i kö. Efter sista mikrofonramen
+        # skickas tystnad en stund så att SvxLinks VOX kan stänga squelchen.
+        frame_seconds = FRAME_MS / 1000
         next_time = time.monotonic()
         last_real = 0.0
+        playing = False
+        waiting_since = None
         while not stop.is_set():
-            try:
-                frame = frames.get(timeout=0.005 if silence else 0.1)
-                last_real = time.monotonic()
-            except queue.Empty:
-                now = time.monotonic()
-                if silence and last_real and now - last_real < UPLINK_SILENCE_TAIL_SECONDS:
-                    frame = silence
-                else:
-                    next_time = now
-                    continue
             now = time.monotonic()
+            if not playing:
+                size = frames.qsize()
+                if size and waiting_since is None:
+                    waiting_since = now
+                elif not size:
+                    waiting_since = None
+                if size and (size >= UPLINK_PREBUFFER_FRAMES
+                             or now - waiting_since >= UPLINK_PREBUFFER_MAX_SECONDS):
+                    playing = True
+                    next_time = now
+                else:
+                    in_tail = silence and last_real and now - last_real < UPLINK_SILENCE_TAIL_SECONDS
+                    if in_tail and now >= next_time:
+                        try:
+                            sender.sendto(silence, address)
+                        except OSError as exc:
+                            logging.warning("UDP-sändningsfel mot SvxLink: %s", exc)
+                        next_time = max(next_time + frame_seconds, now - frame_seconds)
+                    else:
+                        if not in_tail:
+                            next_time = now
+                        stop.wait(0.005)
+                    continue
+            try:
+                frame = frames.get_nowait()
+            except queue.Empty:
+                playing = False
+                waiting_since = None
+                continue
+            last_real = now
             if next_time > now:
                 time.sleep(next_time - now)
             else:
@@ -405,7 +430,7 @@ class AudioBridge:
                 sender.sendto(frame, address)
             except OSError as exc:
                 logging.warning("UDP-sändningsfel mot SvxLink: %s", exc)
-            next_time += FRAME_MS / 1000
+            next_time += frame_seconds
 
     def run(self, exchange):
         """Run one session. ``exchange(bytes)`` returns the portal reply or None on failure."""
