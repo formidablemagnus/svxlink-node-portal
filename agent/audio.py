@@ -37,6 +37,7 @@ MAX_PTT_SECONDS = 180
 PTT_DRAIN_SECONDS = 0.3
 PTT_RELEASE_ATTEMPTS = 3
 PTT_RELEASE_RETRY_SECONDS = 0.05
+PTT_CONFIRM_SECONDS = 0.3
 UPLINK_QUEUE_FRAMES = 40
 UPLINK_PREBUFFER_FRAMES = 8
 UPLINK_PREBUFFER_MAX_SECONDS = 0.3
@@ -221,7 +222,9 @@ class PttControl:
         self.blocked = False
 
     def _write(self, command: bytes) -> None:
-        descriptor = os.open(self.path, os.O_WRONLY | getattr(os, "O_NONBLOCK", 0))
+        descriptor = os.open(
+            self.path, os.O_WRONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0)
+        )
         try:
             mode = os.fstat(descriptor).st_mode
             if not (stat.S_ISCHR(mode) or stat.S_ISFIFO(mode)):
@@ -552,6 +555,9 @@ class AudioBridge:
             if ptt:
                 self._safe_ptt(ptt, False)
                 ptt.release()
+                # SvxLink kan ha hunnit öppna squelchen igen av sista ljudramarna; stäng en gång till.
+                time.sleep(PTT_CONFIRM_SECONDS)
+                ptt.release(force=True)
             stop.set()
             if thread:
                 thread.join(timeout=1)

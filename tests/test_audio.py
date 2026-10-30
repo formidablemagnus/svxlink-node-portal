@@ -116,7 +116,7 @@ class AudioBridgeTests(unittest.TestCase):
             thread.join(10)
         self.assertFalse(thread.is_alive())
         self.assertEqual(len(frame), 960 * 2 * 2)
-        self.assertEqual(writes, [b"Z", b"O", b"Z"])
+        self.assertEqual(writes, [b"Z", b"O", b"Z", b"Z"])
         self.assertTrue(any(len(item) == 320 * 2 for item in uploads))
 
     def test_ptt_release_retries_and_keeps_active_on_failure(self):
