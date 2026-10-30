@@ -19,6 +19,7 @@ MAGIC = b"SVA1"
 MAC_BYTES = 16
 MAX_CLOCK_SKEW_SECONDS = 60
 MAX_REPLY_MIC_BYTES = 1000
+MAX_REPLY_DATAGRAMS = 4
 KEY_CACHE_SECONDS = 30
 NEGATIVE_CACHE_SECONDS = 5
 SEEN_LIMIT = 256
@@ -103,8 +104,15 @@ class AudioUdpServer:
         if body:
             self.hub.add_audio(node_id, body)
         self.touch(node_id)
-        flags, mic = self.hub.take_for_agent(node_id, MAX_REPLY_MIC_BYTES)
-        return build_reply(key, ts, seq, bytes([flags]) + mic), node_id
+        flags, mic = self.hub.take_for_agent(node_id, MAX_REPLY_MIC_BYTES * MAX_REPLY_DATAGRAMS)
+        pieces = [mic[i:i + MAX_REPLY_MIC_BYTES] for i in range(0, len(mic), MAX_REPLY_MIC_BYTES)]
+        pieces = pieces or [b""]
+        # Flag bit 2 means another datagram with more microphone audio follows.
+        replies = [
+            build_reply(key, ts, seq, bytes([flags | (4 if index < len(pieces) - 1 else 0)]) + piece)
+            for index, piece in enumerate(pieces)
+        ]
+        return replies, node_id
 
     def serve(self):
         while True:
@@ -115,6 +123,7 @@ class AudioUdpServer:
             try:
                 result = self.handle(packet)
                 if result:
-                    self.sock.sendto(result[0], address)
+                    for reply in result[0]:
+                        self.sock.sendto(reply, address)
             except Exception:  # one bad packet must never stop the audio relay
                 logging.exception("Fel vid hantering av UDP-ljudpaket.")

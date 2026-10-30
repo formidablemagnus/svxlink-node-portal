@@ -279,22 +279,34 @@ class UdpExchange:
         try:
             self.sock.sendto(packet, self.address)
             deadline = time.monotonic() + self.REPLY_TIMEOUT
+            parts = []
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
+                    if parts:
+                        break
                     raise socket.timeout()
                 self.sock.settimeout(remaining)
-                data, _ = self.sock.recvfrom(self.MAX_REPLY_BYTES)
+                try:
+                    data, _ = self.sock.recvfrom(self.MAX_REPLY_BYTES)
+                except socket.timeout:
+                    if parts:
+                        break
+                    raise
                 prefix = len(self.MAGIC)
                 if not data.startswith(self.MAGIC) or data[prefix:prefix + 8] != expected:
                     continue
                 mac = data[prefix + 8:prefix + 8 + self.MAC_BYTES]
                 body = data[prefix + 8 + self.MAC_BYTES:]
-                if hmac.compare_digest(mac, self._mac(b"R", expected, body)):
-                    self.timeouts = 0
-                    self.answered = True
-                    self.last_flags = body[0] if body else 0
-                    return body
+                if not body or not hmac.compare_digest(mac, self._mac(b"R", expected, body)):
+                    continue
+                parts.append(body)
+                if not body[0] & 4:
+                    break
+            self.timeouts = 0
+            self.answered = True
+            self.last_flags = parts[0][0] & 3
+            return bytes([self.last_flags]) + b"".join(part[1:] for part in parts)
         except socket.timeout:
             self.timeouts += 1
         except OSError as exc:

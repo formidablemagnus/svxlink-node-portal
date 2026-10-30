@@ -189,6 +189,11 @@ class UdpTransportTests(unittest.TestCase):
                 hub.push_mic(node["node_id"], "admin", True, b"\x02\x00" * 5)
                 reply = good.exchange(b"")
                 self.assertEqual(reply, bytes([3]) + b"\x02\x00" * 5)
+
+                big = bytes(range(256)) * 12
+                hub.push_mic(node["node_id"], "admin", True, big)
+                reply = good.exchange(b"")
+                self.assertEqual(reply, bytes([3]) + big)
             finally:
                 good.close()
                 bad.close()
