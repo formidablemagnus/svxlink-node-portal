@@ -24,6 +24,7 @@ VERSION_CHECK_SECONDS = 30
 MAX_LINES = 250
 MAX_NODE_INFO_BYTES = 256 * 1024
 MAX_STATE_BUFFER = 65536
+STATE_EOF_REOPEN_SECONDS = 3.0
 RADIO_EVENTS = ("Rx:sql_state", "Voter:sql_state", "Tx:state")
 TG_EVENT_RE = re.compile(
     r"(Talker start|Talker stop) on TG #([0-9]+)(?::\s*([^\s\x00]+))?", re.IGNORECASE
@@ -427,11 +428,22 @@ class Collector:
                 os.close(descriptor)
             self._stop.wait(0.5)
 
+    @staticmethod
+    def _same_file(path: str, opened: os.stat_result) -> bool:
+        """True while ``path`` still resolves to the file we hold open (SvxLink may recreate the PTY)."""
+        try:
+            current = os.stat(path)
+        except OSError:
+            return False
+        return (current.st_dev, current.st_ino) == (opened.st_dev, opened.st_ino)
+
     def _read_state(self, descriptor: int, path: str) -> None:
         buffer = b""
+        opened = os.fstat(descriptor)
+        eof_since: float | None = None
         while not self._stop.is_set():
             current_path, _ = self._state_pty_path()
-            if current_path != path:
+            if current_path != path or not self._same_file(path, opened):
                 return
             ready, _, _ = select.select([descriptor], [], [], 0.5)
             if not ready:
@@ -441,9 +453,15 @@ class Collector:
             except BlockingIOError:
                 continue
             if not chunk:
-                # No writer on the PTY; avoid spinning on EOF.
+                # Ingen skrivare på PTY:n. Efter en omstart av SvxLink blir den gamla
+                # PTY:n kvar som EOF, så öppna om efter en kort stund.
+                now = time.monotonic()
+                eof_since = eof_since or now
+                if now - eof_since >= STATE_EOF_REOPEN_SECONDS:
+                    return
                 self._stop.wait(0.2)
                 continue
+            eof_since = None
             buffer += chunk
             lines = buffer.split(b"\n")
             buffer = lines.pop()

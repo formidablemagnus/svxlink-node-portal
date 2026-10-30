@@ -35,6 +35,8 @@ MAX_CONSECUTIVE_FAILURES = 5
 MAX_REPLY_DATAGRAMS = 4
 MAX_PTT_SECONDS = 180
 PTT_DRAIN_SECONDS = 0.3
+PTT_RELEASE_ATTEMPTS = 3
+PTT_RELEASE_RETRY_SECONDS = 0.05
 UPLINK_QUEUE_FRAMES = 40
 UPLINK_PREBUFFER_FRAMES = 8
 UPLINK_PREBUFFER_MAX_SECONDS = 0.3
@@ -244,14 +246,22 @@ class PttControl:
         elif not wanted and self.active:
             self.release()
 
-    def release(self) -> None:
-        if not self.active:
+    def release(self, force: bool = False) -> None:
+        """Close the squelch; ``active`` is only cleared once SvxLink accepted the close."""
+        if not self.path or not (self.active or force):
             return
-        self.active = False
-        try:
-            self._write(SQUELCH_CLOSE)
-        except (OSError, ValueError) as exc:
-            logging.warning("Kunde inte släppa PTT via %s: %s", self.path, exc)
+        error: Exception | None = None
+        for attempt in range(PTT_RELEASE_ATTEMPTS):
+            try:
+                self._write(SQUELCH_CLOSE)
+            except (OSError, ValueError) as exc:
+                error = exc
+                if attempt + 1 < PTT_RELEASE_ATTEMPTS:
+                    time.sleep(PTT_RELEASE_RETRY_SECONDS)
+            else:
+                self.active = False
+                return
+        logging.warning("Kunde inte släppa PTT via %s: %s", self.path, error)
 
 
 class UdpExchange:
@@ -261,7 +271,7 @@ class UdpExchange:
     MAC_BYTES = 16
     REPLY_TIMEOUT = 0.25
     MAX_REPLY_BYTES = 4096
-    HOLD_TIMEOUTS = 50
+    HOLD_TIMEOUTS = 12
 
     def __init__(self, node_id: str, token: str, address: tuple[str, int]) -> None:
         self.node_id = node_id.encode("ascii")
@@ -473,6 +483,9 @@ class AudioBridge:
         self.last_error = ""
         rx, tx = config["rx"], config["tx"]
         ptt = PttControl(config["ptt_path"]) if rx else None
+        if ptt:
+            # Stäng en squelch som hängt kvar från en tidigare session eller en omstartad agent.
+            ptt.release(force=True)
         frames: queue.Queue[bytes] = queue.Queue(maxsize=UPLINK_QUEUE_FRAMES)
         stop = threading.Event()
         thread: threading.Thread | None = None

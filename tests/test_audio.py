@@ -116,8 +116,31 @@ class AudioBridgeTests(unittest.TestCase):
             thread.join(10)
         self.assertFalse(thread.is_alive())
         self.assertEqual(len(frame), 960 * 2 * 2)
-        self.assertEqual(writes, [b"O", b"Z"])
+        self.assertEqual(writes, [b"Z", b"O", b"Z"])
         self.assertTrue(any(len(item) == 320 * 2 for item in uploads))
+
+    def test_ptt_release_retries_and_keeps_active_on_failure(self):
+        ptt = audio.PttControl("/dev/shm/ptt")
+        ptt.active = True
+        calls = []
+
+        def flaky(self, command):
+            calls.append(command)
+            if len(calls) < 3:
+                raise OSError("busy")
+
+        with patch.object(audio.PttControl, "_write", flaky), patch.object(audio.time, "sleep"):
+            ptt.release()
+        self.assertFalse(ptt.active)
+        self.assertEqual(calls, [b"Z"] * 3)
+
+        def broken(self, command):
+            raise OSError("gone")
+
+        ptt.active = True
+        with patch.object(audio.PttControl, "_write", broken), patch.object(audio.time, "sleep"):
+            ptt.release()
+        self.assertTrue(ptt.active)
 
     def test_missing_udp_devices_end_session_with_error(self):
         bridge = audio.AudioBridge("unused", lambda _: {"GLOBAL": {}})
