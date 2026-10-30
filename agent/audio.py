@@ -20,6 +20,7 @@ import time
 
 WIRE_RATE = 16000
 FRAME_MS = 20
+WIRE_FRAME_BYTES = WIRE_RATE * FRAME_MS // 1000 * 2
 DEFAULT_CARD_RATE = 16000
 UDP_CHANNELS = 2
 MAX_PAYLOAD_BYTES = 48 * 1024
@@ -471,6 +472,7 @@ class AudioBridge:
             )
             thread.start()
         failures = 0
+        wire_rest = b""
         logging.info("Ljudbrygga startad.")
         try:
             while True:
@@ -489,18 +491,21 @@ class AudioBridge:
                 wanted = bool(reply[0] & 2) and rx is not None
                 mic = reply[1:]
                 if wanted:
-                    if mic:
-                        converted = wire_to_node(mic, rx_channels, rx["rate"])
-                        for offset in range(0, len(converted), frame_bytes):
-                            frame = converted[offset:offset + frame_bytes]
-                            if len(frame) < frame_bytes:
-                                frame += bytes(frame_bytes - len(frame))
-                            self._push(frames, frame)
+                    # Bara hela 20 ms-ramar omvandlas; resten sparas till nästa utbyte
+                    # så att inga tystnadsluckor fylls in mitt i talet.
+                    wire_rest += mic
+                    usable = len(wire_rest) // WIRE_FRAME_BYTES * WIRE_FRAME_BYTES
+                    if usable:
+                        converted = wire_to_node(wire_rest[:usable], rx_channels, rx["rate"])
+                        wire_rest = wire_rest[usable:]
+                        for offset in range(0, len(converted) - frame_bytes + 1, frame_bytes):
+                            self._push(frames, converted[offset:offset + frame_bytes])
                             self.mic_frames += 1
                             if self.on_activity and self.mic_frames % 25 == 1:
                                 self.on_activity()
                     self._safe_ptt(ptt, True)
                 elif ptt:
+                    wire_rest = b""
                     deadline = time.monotonic() + PTT_DRAIN_SECONDS
                     while not frames.empty() and time.monotonic() < deadline:
                         time.sleep(0.02)
