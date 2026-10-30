@@ -773,7 +773,13 @@ def validate_udp_audio(value):
     mic_frames = value.get("mic_frames", 0)
     if type(mic_frames) is not int or not 0 <= mic_frames <= 10**12:
         raise ValueError("'udp_audio.mic_frames' måste vara ett heltal.")
-    return {**flags, "issues": issues, "mic_frames": mic_frames,
+    numbers = {}
+    for key in ("rx_rate", "rx_channels"):
+        number = value.get(key, 0)
+        if type(number) is not int or not 0 <= number <= 1_000_000:
+            raise ValueError(f"'udp_audio.{key}' måste vara ett heltal.")
+        numbers[key] = number
+    return {**flags, **numbers, "issues": issues, "mic_frames": mic_frames,
             "error": optional_text(value, "error", 256) or ""}
 
 

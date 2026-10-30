@@ -29,7 +29,9 @@
     const level = Math.round(peak * 100);
     peak = 0;
     diagText.textContent = `Mikrofon: nivå ${level}%, skickat ${Math.round(sentBytes / 1024)} kB till portalen, `
-      + `${capabilities.mic_frames || 0} ljudramar levererade till SvxLink.`;
+      + `${capabilities.mic_frames || 0} ljudramar levererade till SvxLink `
+      + `(noden tar emot ${capabilities.rx_rate || '?'} Hz, ${capabilities.rx_channels || '?'} kanal(er); `
+      + `webbläsaren spelar in med ${mic ? mic.context.sampleRate : '?'} Hz).`;
   }
   setInterval(renderDiag, 1000);
   let nodeOnline = false;

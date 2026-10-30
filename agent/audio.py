@@ -145,6 +145,8 @@ def describe(sections):
         "talk": config["rx"] is not None,
         "ptt": bool(config["ptt_path"]),
         "sample_rate": WIRE_RATE,
+        "rx_rate": config["rx"]["rate"] if config["rx"] else 0,
+        "rx_channels": config["rx"]["channels"] if config["rx"] else 0,
         "issues": config["issues"][:5],
         "error": "",
     }
