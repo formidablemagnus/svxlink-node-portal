@@ -970,6 +970,11 @@ def node_record(row, update=None):
     status = json.loads(row["status_json"]) if row["status_json"] else None
     if status is not None:
         merge_live_data(row["id"], status)
+        if not online:
+            status["active"] = None
+            status["service_status"] = "unknown"
+            status["current_tg"] = None
+            status["logs"] = []
     return {
         "id": row["id"],
         "name": row["name"],

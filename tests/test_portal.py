@@ -379,6 +379,35 @@ class PortalStatusTests(unittest.TestCase):
                     ["SvxLink started", "Selecting TG 240"],
                 )
 
+                with database() as connection:
+                    connection.execute(
+                        "UPDATE nodes SET last_seen = ? WHERE id = ?",
+                        ("2000-01-01T00:00:00+00:00", node["node_id"]),
+                    )
+
+                with urlopen(dashboard_request, timeout=2) as response:
+                    dashboard = json.loads(response.read().decode("utf-8"))
+                offline_status = dashboard["nodes"][0]["status"]
+                self.assertFalse(dashboard["nodes"][0]["online"])
+                self.assertIsNone(offline_status["active"])
+                self.assertEqual(offline_status["service_status"], "unknown")
+                self.assertIsNone(offline_status["current_tg"])
+                self.assertEqual(offline_status["logs"], [])
+
+                with urlopen(detail_request, timeout=2) as response:
+                    detail = json.loads(response.read().decode("utf-8"))["node"]
+                self.assertFalse(detail["online"])
+                self.assertIsNone(detail["status"]["active"])
+                self.assertEqual(detail["status"]["service_status"], "unknown")
+                self.assertIsNone(detail["status"]["current_tg"])
+                self.assertEqual(detail["status"]["logs"], [])
+
+                with database() as connection:
+                    connection.execute(
+                        "UPDATE nodes SET last_seen = ? WHERE id = ?",
+                        ("2999-01-01T00:00:00+00:00", node["node_id"]),
+                    )
+
                 page_request = Request(
                     f"{base_url}/nodes/{node['node_id']}",
                     headers={**session_header(base_url, credentials)},

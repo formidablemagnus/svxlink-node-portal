@@ -76,7 +76,7 @@ function renderNodes(nodes, latestSvxlink, canDeleteNodes) {
       <td>${esc(radioNames[radio.mode] || 'Okänd')}</td>
       <td>${node.online && Number.isInteger(radio.signal_level) ? signalRing(radio.signal_level) : '—'}</td>
       <td>${status.current_tg ? `TG ${esc(status.current_tg)}` : 'Okänd'}</td>
-      <td><span class="status-badge ${logClass}" title="${esc(logTitle)}">${esc(logLabel)}</span></td>
+      <td>${node.online ? `<span class="status-badge ${logClass}" title="${esc(logTitle)}">${esc(logLabel)}</span>` : ''}</td>
       <td>${status.node_version ? `v${esc(status.node_version)}` : 'Okänd'}</td>
       <td>${esc(status.svxlink_version || 'Okänd')}${node.update ? ` <span class="update-spinner" role="img" aria-label="SvxLink-uppdatering pågår" title="${esc(node.update.progress?.message || 'SvxLink-uppdatering pågår')}"></span>` : ''}${isOutdated(status.svxlink_version, latestSvxlink) ? ` <a class="version-warning" href="https://github.com/sm0svx/svxlink" target="_blank" rel="noopener noreferrer" title="Ny SvxLink-version finns (${esc(latestSvxlink)})" aria-label="Ny SvxLink-version finns (${esc(latestSvxlink)})">&#9888;</a>` : ''}${isPrerelease(status.svxlink_version, latestSvxlink) ? ` <span class="prerelease-marker" role="img" title="Pre-release, nyare än senaste stabila release (${esc(latestSvxlink)})" aria-label="Pre-release, nyare än senaste stabila release (${esc(latestSvxlink)})"><svg viewBox="0 0 20 18" width="18" height="16" aria-hidden="true"><path d="M10 1.5 19 16.5H1Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><text x="10" y="14" text-anchor="middle" font-size="9" font-weight="700" fill="currentColor">B</text></svg></span>` : ''}</td>
       <td>${esc(lastSeen)}</td>

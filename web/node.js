@@ -227,7 +227,7 @@ function renderNode(node) {
     el.setAttribute('aria-label', label);
   };
   setDot('online', node.online, `Nodanslutning: ${node.online ? 'online' : 'offline'}`);
-  if (!node.online && status.active === true) {
+  if (!node.online) {
     setDot('service', 'unknown', 'SvxLink-tjänst: okänd (noden är offline)');
   } else {
     setDot('service', status.active === true, `SvxLink-tjänst: ${status.active === true ? 'igång' : (status.service_status || 'avstängd/okänd')}`);
@@ -242,7 +242,9 @@ function renderNode(node) {
   setText('logic', status.logic || 'Okänd');
   if (window.SvxAudio) window.SvxAudio.update(status.udp_audio, node.online);
   setText('callsign', status.callsign || 'Okänd');
-  setText('service-status', SERVICE_LABELS[status.service_status] || status.service_status || 'Okänd');
+  setText('service-status', node.online
+    ? SERVICE_LABELS[status.service_status] || status.service_status || 'Okänd'
+    : 'Okänd');
   setText('last-seen', lastSeen);
   setText('node-id', node.id);
   nodeOnline = Boolean(node.online);
