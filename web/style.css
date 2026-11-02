@@ -190,6 +190,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .dtmf-form { max-width: 680px; }
 .dtmf-form > label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
 .dtmf-controls { display: flex; gap: 9px; }
+.checkbox-label { display: block; margin: 10px 0 14px; }
 .dtmf-controls input { min-width: 0; flex: 1; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #151515; color: var(--text); font: 16px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .08em; }
 .dtmf-form > p { margin: 6px 0 0; }
 .node-form { max-width: 680px; margin-top: 12px; }
