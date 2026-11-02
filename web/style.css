@@ -216,7 +216,11 @@ dialog input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); bo
 .node-choice { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: #1a1a1a; cursor: pointer; }
 .node-choice input { accent-color: var(--blue); }
 .node-choice-name { flex: 1; overflow-wrap: anywhere; }
-.node-choice-offline { opacity: .55; cursor: not-allowed; }
+.node-choice-offline { cursor: not-allowed; }
+.node-choice-offline .node-choice-name { color: var(--muted); }
+.status-dot.node-status-online { background: var(--green); }
+.status-dot.node-status-service-stopped { background: #f5c518; }
+.status-dot.node-status-offline { background: var(--muted); }
 .node-choice .state { font-size: 12px; white-space: nowrap; }
 .bulk-results { margin: 0; padding: 0; list-style: none; }
 .bulk-results li { padding: 9px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }

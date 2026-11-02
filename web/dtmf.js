@@ -48,6 +48,12 @@ function renderNodes(nodes) {
   picker.replaceChildren();
   for (const node of nodes) {
     const available = node.online && node.status?.active === true;
+    const nodeIsOffline = !node.online;
+    const statusLabel = nodeIsOffline
+      ? 'Nod offline'
+      : available
+        ? 'Nod och SvxLink igång'
+        : 'Nod igång, SvxLink stängd';
     const label = document.createElement('label');
     label.className = `node-choice${available ? '' : ' node-choice-offline'}`;
     const checkbox = document.createElement('input');
@@ -59,12 +65,10 @@ function renderNodes(nodes) {
     name.className = 'node-choice-name';
     name.textContent = node.name;
     const nodeStatus = document.createElement('span');
-    nodeStatus.className = `state ${available ? 'online' : 'offline'}`;
-    nodeStatus.textContent = !node.online
-      ? 'Offline'
-      : available
-        ? 'Online · SvxLink igång'
-        : 'SvxLink ej igång';
+    nodeStatus.className = `status-dot node-status-${nodeIsOffline ? 'offline' : available ? 'online' : 'service-stopped'}`;
+    nodeStatus.setAttribute('role', 'img');
+    nodeStatus.setAttribute('aria-label', statusLabel);
+    nodeStatus.title = statusLabel;
     label.append(checkbox, name, nodeStatus);
     picker.append(label);
   }
