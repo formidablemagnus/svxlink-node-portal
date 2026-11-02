@@ -9,6 +9,12 @@ document.getElementById('config-link').href = `/nodes/${encodeURIComponent(nodeI
 document.getElementById('nodeinfo-link').href = `/nodes/${encodeURIComponent(nodeId)}/nodeinfo`;
 document.getElementById('schedules-link').href = `/nodes/${encodeURIComponent(nodeId)}/schedules`;
 document.getElementById('service-log-link').href = `/nodes/${encodeURIComponent(nodeId)}/service-log`;
+const popout = document.getElementById('remote-popout');
+popout.href = `/nodes/${encodeURIComponent(nodeId)}/remote`;
+popout.addEventListener('click', (event) => {
+  event.preventDefault();
+  window.open(popout.href, `svx-remote-${nodeId}`, 'popup=yes,width=360,height=420');
+});
 const dtmfForm = document.getElementById('dtmf-form');
 const dtmfInput = document.getElementById('dtmf-sequence');
 const dtmfButton = document.getElementById('dtmf-send');

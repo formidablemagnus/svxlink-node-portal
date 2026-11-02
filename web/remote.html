@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fjärrstyrning – SvxLink Manager</title>
+  <link rel="stylesheet" href="/assets/style.css">
+  <style>
+    body { padding: 12px; }
+    .remote { max-width: 340px; margin: 0 auto; display: grid; gap: 10px; }
+    .remote h1 { font-size: 18px; margin: 0; }
+    .remote .ptt-button { width: 100%; min-height: 72px; font-size: 18px; }
+    .remote .status-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+    .remote .status-item { display: inline-flex; align-items: center; gap: 6px; }
+  </style>
+</head>
+<body>
+  <div class="remote">
+    <div>
+      <h1 id="node-name">Hämtar nod…</h1>
+      <span id="audio-state" class="pill">Frånkopplad</span>
+      <span id="online-text" class="muted"></span>
+    </div>
+    <div class="status-row">
+      <span class="status-item"><span id="radio-tx" class="status-dot radio-off" role="img" aria-label="TX: passiv"></span><small id="radio-tx-text">TX passiv</small></span>
+      <span class="status-item"><span id="radio-rx" class="status-dot radio-off" role="img" aria-label="RX: passiv"></span><small id="radio-rx-text">RX passiv</small></span>
+    </div>
+    <div>Senaste talare: <strong id="tg-event">Okänd</strong></div>
+    <section id="audio-panel" data-autoconnect="1" hidden>
+      <button id="audio-ptt" type="button" class="ptt-button" disabled>Håll för att sända (PTT)</button>
+      <label class="checkbox-label"><input id="audio-ptt-lock" type="checkbox"> Lås-PTT</label>
+      <button id="audio-connect" type="button" disabled>Anslut ljud</button>
+      <label for="audio-volume">Volym</label>
+      <input id="audio-volume" type="range" min="0" max="1" step="0.05" value="0.8">
+      <input id="audio-mic-gain" type="range" min="0.05" max="2" step="0.05" value="0.4" hidden>
+      <p id="audio-error" class="error" role="status" aria-live="polite"></p>
+      <p id="audio-diag" class="muted" role="status" hidden></p>
+    </section>
+    <p id="error" class="error" role="status" aria-live="polite"></p>
+  </div>
+  <script src="/assets/audio.js"></script>
+  <script src="/assets/remote.js"></script>
+</body>
+</html>

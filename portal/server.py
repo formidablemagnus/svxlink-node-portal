@@ -151,6 +151,7 @@ STATIC_ASSETS = {
     "service-log.js": JS,
     "dtmf.js": JS,
     "audio.js": JS,
+    "remote.js": JS,
     "admin.js": JS,
     "login.js": JS,
 }
@@ -167,7 +168,7 @@ ADMIN_NODE_PAGES = {
     "nodeinfo": "nodeinfo.html",
     "schedules": "schedules.html",
 }
-NODE_PAGES = {"service-log": "service-log.html"}
+NODE_PAGES = {"service-log": "service-log.html", "remote": "remote.html"}
 VALID_RADIO_MODES = {"tx", "rx", "idle", "unknown"}
 MAX_RADIO_EVENTS_PER_REQUEST = 100
 MAX_RADIO_VIEWERS_PER_NODE = 20

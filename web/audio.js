@@ -5,7 +5,7 @@
   const START_DELAY_SECONDS = 0.15;
   const panel = document.getElementById('audio-panel');
   if (!panel) return;
-  const nodeId = window.location.pathname.split('/').filter(Boolean).pop();
+  const nodeId = window.location.pathname.split('/').filter(Boolean)[1];
   const base = `/api/nodes/${encodeURIComponent(nodeId)}`;
   const connectButton = document.getElementById('audio-connect');
   const pttButton = document.getElementById('audio-ptt');
@@ -37,6 +37,7 @@
   }
   setInterval(renderDiag, 1000);
   let nodeOnline = false;
+  let autoTried = false;
   let connected = false;
   let abort = null;
   let context = null;
@@ -295,6 +296,10 @@
     render();
   }
 
+  // Webbläsaren kan starta ljudet pausat utan användargest; återuppta vid första interaktionen.
+  document.addEventListener('pointerdown', () => {
+    if (context && context.state === 'suspended') context.resume();
+  });
   connectButton.addEventListener('click', () => (connected ? disconnect() : connect()));
   volume.addEventListener('input', () => { if (gain) gain.gain.value = Number(volume.value); });
   pttButton.addEventListener('pointerdown', (event) => {
@@ -326,6 +331,10 @@
       nodeOnline = Boolean(online);
       if (!nodeOnline && connected) setState('Noden är offline');
       render();
+      if (panel.dataset.autoconnect === '1' && !autoTried && capabilities.listen && nodeOnline) {
+        autoTried = true;
+        connect();
+      }
     },
   };
 })();
