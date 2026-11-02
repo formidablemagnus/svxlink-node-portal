@@ -9,6 +9,7 @@
   const base = `/api/nodes/${encodeURIComponent(nodeId)}`;
   const connectButton = document.getElementById('audio-connect');
   const pttButton = document.getElementById('audio-ptt');
+  const lockBox = document.getElementById('audio-ptt-lock');
   const volume = document.getElementById('audio-volume');
   const micGain = document.getElementById('audio-mic-gain');
   try {
@@ -268,7 +269,21 @@
     render();
   }
 
+  function lockEnabled() {
+    return Boolean(lockBox && lockBox.checked);
+  }
+
   function releasePtt() {
+    if (lockEnabled() && pttHeld) return;
+    forceReleasePtt();
+  }
+
+  function togglePtt() {
+    if (lockEnabled() && pttHeld) forceReleasePtt();
+    else pressPtt();
+  }
+
+  function forceReleasePtt() {
     const wasSending = pttSending;
     pttHeld = false;
     pttSending = false;
@@ -285,15 +300,16 @@
   pttButton.addEventListener('pointerdown', (event) => {
     event.preventDefault();
     pttButton.setPointerCapture(event.pointerId);
-    pressPtt();
+    togglePtt();
   });
+  if (lockBox) lockBox.addEventListener('change', () => { if (!lockBox.checked) forceReleasePtt(); });
   for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
     pttButton.addEventListener(type, releasePtt);
   }
   pttButton.addEventListener('keydown', (event) => {
     if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) {
       event.preventDefault();
-      pressPtt();
+      togglePtt();
     }
   });
   pttButton.addEventListener('keyup', (event) => {
@@ -301,7 +317,7 @@
   });
   pttButton.addEventListener('blur', releasePtt);
   window.addEventListener('blur', releasePtt);
-  window.addEventListener('pagehide', () => { releasePtt(); disconnect(); });
+  window.addEventListener('pagehide', () => { forceReleasePtt(); disconnect(); });
 
   window.SvxAudio = {
     /** @param {Object|null} udpAudio @param {boolean} online @returns {void} */
