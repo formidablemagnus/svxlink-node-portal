@@ -685,6 +685,8 @@ class Collector:
             if match:
                 current_tg = match.group(1)
                 break
+        if current_tg == "0":
+            tg_event = tg_time = ""
         logs = [clean_text(line, max_line_bytes) for line in lines[-max_logs:]]
         if log_error:
             logs.append(clean_text(log_error, max_line_bytes))

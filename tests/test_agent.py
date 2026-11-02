@@ -81,6 +81,23 @@ class AgentStatusTests(unittest.TestCase):
         self.assertEqual(status["radio"]["mode"], "unknown")
         self.assertEqual(status["logs"][-1], "x ERROR boom")
 
+    def test_collector_clears_latest_talker_when_talkgroup_returns_to_zero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "svxlink.log"
+            log.write_text(
+                "x ReflectorLogic: Selecting TG #240\n"
+                "x Talker start on TG #240: SA7ABC\n"
+                "x ReflectorLogic: Selecting TG #0\n",
+                encoding="utf-8",
+            )
+            collector = Collector(Path(directory) / "missing.conf", log)
+            collector._poll_log()
+            status = collector.snapshot()
+            collector.stop()
+        self.assertEqual(status["current_tg"], "0")
+        self.assertEqual(status["tg_event"], "")
+        self.assertEqual(status["tg_time"], "")
+
     def test_collector_limits_forwarded_log_lines(self):
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "svxlink.log"
