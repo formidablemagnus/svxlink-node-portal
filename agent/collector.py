@@ -25,7 +25,7 @@ MAX_LINES = 250
 MAX_NODE_INFO_BYTES = 256 * 1024
 MAX_STATE_BUFFER = 65536
 STATE_EOF_REOPEN_SECONDS = 3.0
-RADIO_EVENTS = ("Rx:sql_state", "Voter:sql_state", "Tx:state")
+RADIO_EVENTS = ("Rx:sql_state", "Voter:sql_state", "Tx:state", "MultiTx:state")
 TG_EVENT_RE = re.compile(
     r"(Talker start|Talker stop) on TG #([0-9]+)(?::\s*([^\s\x00]+))?", re.IGNORECASE
 )
@@ -215,6 +215,19 @@ class RadioState:
             ):
                 raise ValueError("felaktig sändarstatus")
             self.transmitters[data["name"]] = data["transmit"]
+        elif event_name == "MultiTx:state":
+            if not isinstance(data, list):
+                raise ValueError("felaktig MultiTx-status")
+            for transmitter in data:
+                if (
+                    not isinstance(transmitter, dict)
+                    or not isinstance(transmitter.get("name"), str)
+                    or not transmitter["name"]
+                    or not isinstance(transmitter.get("transmit"), bool)
+                ):
+                    raise ValueError("felaktig sändarstatus")
+            for transmitter in data:
+                self.transmitters[transmitter["name"]] = transmitter["transmit"]
         elif event_name == "Rx:sql_state":
             if (
                 not isinstance(data, dict)

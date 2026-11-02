@@ -113,6 +113,21 @@ class AgentStatusTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             state.apply(*parse_state_line(b'5 Tx:state {"name":"","transmit":true}'))
 
+    def test_multitx_state(self):
+        state = RadioState()
+        state.apply(*parse_state_line(
+            b'1 MultiTx:state [{"id":"T","name":"Tx1","transmit":true},'
+            b'{"id":"W","name":"Tx2","transmit":false}]'
+        ))
+        snapshot = state.snapshot()
+        self.assertEqual(snapshot["mode"], "tx")
+        self.assertEqual(
+            snapshot["transmitters"],
+            [{"name": "Tx1", "transmit": True}, {"name": "Tx2", "transmit": False}],
+        )
+        with self.assertRaises(ValueError):
+            state.apply(*parse_state_line(b'2 MultiTx:state [{"name":"","transmit":true}]'))
+
     def test_accepts_http_portal_endpoint(self):
         self.assertEqual(
             validate_portal_url("http://portal.example:8080/"),
