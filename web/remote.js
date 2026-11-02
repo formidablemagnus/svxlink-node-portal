@@ -30,6 +30,7 @@ async function refresh() {
     setText('node-name', node.name);
     document.title = `${node.name} – Fjärrstyrning`;
     setText('online-text', node.online ? 'online' : 'offline');
+    setText('talkgroup', status.current_tg ? `TG ${status.current_tg}` : 'Okänd');
     setText('tg-event', status.tg_event || 'Okänd');
     if (Date.now() - liveRadioAt > 5000) renderRadio(status.radio || {});
     setText('error', '');
