@@ -94,11 +94,11 @@ class PortalNtfyTests(unittest.TestCase):
                 "Nod Älgen online",
             )
         request = open_url.call_args.args[0]
-        self.assertEqual(request.full_url, "https://ntfy.example.net/base/svxlink-alerts")
+        self.assertEqual(request.full_url, "https://ntfy.example.net/base/")
         self.assertEqual(request.get_method(), "POST")
         self.assertEqual(
             request.data,
-            '{"title": "SvxLink tjänst startad", "message": "Nod Älgen online"}'.encode("utf-8"),
+            '{"topic": "svxlink-alerts", "title": "SvxLink tjänst startad", "message": "Nod Älgen online"}'.encode("utf-8"),
         )
         self.assertEqual(request.get_header("Content-type"), "application/json; charset=utf-8")
 
