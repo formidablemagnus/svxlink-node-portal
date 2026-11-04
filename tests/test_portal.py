@@ -90,14 +90,17 @@ class PortalNtfyTests(unittest.TestCase):
             send_ntfy_notification(
                 "https://ntfy.example.net/base",
                 "svxlink-alerts",
-                "Nod online",
+                "SvxLink tjänst startad",
                 "Nod Älgen online",
             )
         request = open_url.call_args.args[0]
         self.assertEqual(request.full_url, "https://ntfy.example.net/base/svxlink-alerts")
         self.assertEqual(request.get_method(), "POST")
-        self.assertEqual(request.data, "Nod Älgen online".encode("utf-8"))
-        self.assertEqual(request.get_header("Title"), "Nod online")
+        self.assertEqual(
+            request.data,
+            '{"title": "SvxLink tjänst startad", "message": "Nod Älgen online"}'.encode("utf-8"),
+        )
+        self.assertEqual(request.get_header("Content-type"), "application/json; charset=utf-8")
 
     def test_settings_validate_and_persist(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(

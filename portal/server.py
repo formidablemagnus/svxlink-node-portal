@@ -788,8 +788,11 @@ def save_ntfy_settings(actor: str, payload: object) -> dict[str, Any]:
 def send_ntfy_notification(server: str, topic: str, title: str, message: str) -> None:
     request = Request(
         f"{server}/{quote(topic, safe='')}",
-        data=message.encode("utf-8"),
-        headers={"Title": title, "Content-Type": "text/plain; charset=utf-8"},
+        data=json.dumps(
+            {"title": title, "message": message},
+            ensure_ascii=False,
+        ).encode("utf-8"),
+        headers={"Content-Type": "application/json; charset=utf-8"},
         method="POST",
     )
     with urlopen(request, timeout=10) as response:
