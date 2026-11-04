@@ -226,6 +226,51 @@ document.getElementById('nodeconfig-form').addEventListener('submit', async (eve
 api('/api/node-config').then((data) => fillNodeConfig(data.config)).catch((error) => {
   nodeConfigStatus.textContent = error.message;
 });
+
+const ntfyEventFields = {
+  node_offline: 'ntfy-node-offline',
+  node_online: 'ntfy-node-online',
+  service_stopped: 'ntfy-service-stopped',
+  service_started: 'ntfy-service-started',
+  log_warning: 'ntfy-log-warning',
+  log_error: 'ntfy-log-error',
+};
+const ntfyStatus = document.getElementById('ntfy-status');
+
+function fillNtfySettings(settings) {
+  document.getElementById('ntfy-server').value = settings.server;
+  document.getElementById('ntfy-topic').value = settings.topic;
+  for (const [event, id] of Object.entries(ntfyEventFields)) {
+    document.getElementById(id).checked = settings.events[event];
+  }
+}
+
+document.getElementById('ntfy-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  ntfyStatus.textContent = '';
+  const settings = {
+    server: document.getElementById('ntfy-server').value.trim(),
+    topic: document.getElementById('ntfy-topic').value.trim(),
+    events: Object.fromEntries(Object.entries(ntfyEventFields).map(([name, id]) => [
+      name, document.getElementById(id).checked,
+    ])),
+  };
+  try {
+    const data = await api('/api/ntfy-settings', {
+      method: 'POST',
+      body: JSON.stringify(settings),
+    });
+    fillNtfySettings(data.settings);
+    ntfyStatus.textContent = 'ntfy-inställningarna är sparade.';
+    await loadAudit();
+  } catch (error) {
+    ntfyStatus.textContent = error.message;
+  }
+});
+api('/api/ntfy-settings').then((data) => fillNtfySettings(data.settings)).catch((error) => {
+  ntfyStatus.textContent = error.message;
+});
+
 document.getElementById('audit-refresh').addEventListener('click', loadAudit);
 
 api('/api/users').then((data) => renderUsers(data.users)).catch((error) => {

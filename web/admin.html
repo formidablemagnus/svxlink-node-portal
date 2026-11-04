@@ -20,6 +20,7 @@
     <div class="admin-tabs" role="tablist" aria-label="Inställningar">
       <button id="users-tab" type="button" role="tab" aria-selected="true" aria-controls="users-panel" tabindex="0">Användare</button>
       <button id="nodeconfig-tab" type="button" role="tab" aria-selected="false" aria-controls="nodeconfig-panel" tabindex="-1">Nodkonfig</button>
+      <button id="ntfy-tab" type="button" role="tab" aria-selected="false" aria-controls="ntfy-panel" tabindex="-1">Notiser (ntfy)</button>
       <button id="backup-tab" type="button" role="tab" aria-selected="false" aria-controls="backup-panel" tabindex="-1">Säkerhetskopia</button>
       <button id="audit-tab" type="button" role="tab" aria-selected="false" aria-controls="audit-panel" tabindex="-1">Granskningslogg</button>
     </div>
@@ -60,6 +61,27 @@
         <div class="admin-form"><button type="submit">Spara nodkonfig</button></div>
       </form>
       <p id="nodeconfig-status" class="editor-status" role="status" aria-live="polite"></p>
+    </section>
+    <section id="ntfy-panel" class="panel" role="tabpanel" aria-labelledby="ntfy-tab" tabindex="0" hidden>
+      <div class="panel-heading"><div><h2>Notiser via ntfy</h2>
+        <p class="muted">Ange ntfy-server och ämne (topic), och välj vilka händelser som ska skickas.</p></div></div>
+      <form id="ntfy-form" class="node-config-form">
+        <label for="ntfy-server">Serveradress</label>
+        <input id="ntfy-server" type="url" maxlength="500" autocomplete="url" placeholder="https://ntfy.sh">
+        <label for="ntfy-topic">Ämne (topic)</label>
+        <input id="ntfy-topic" type="text" maxlength="64" pattern="[A-Za-z0-9_-]{1,64}" autocomplete="off" placeholder="mitt-svxlink">
+        <fieldset>
+          <legend>Skicka notis när</legend>
+          <label><input id="ntfy-node-offline" type="checkbox"> Nod går offline</label>
+          <label><input id="ntfy-node-online" type="checkbox"> Nod går online</label>
+          <label><input id="ntfy-service-stopped" type="checkbox"> SvxLink-tjänst stoppad</label>
+          <label><input id="ntfy-service-started" type="checkbox"> SvxLink-tjänst startad</label>
+          <label><input id="ntfy-log-warning" type="checkbox"> Ny varning i logg</label>
+          <label><input id="ntfy-log-error" type="checkbox"> Nytt fel i logg</label>
+        </fieldset>
+        <div class="admin-form"><button type="submit">Spara ntfy-inställningar</button></div>
+      </form>
+      <p id="ntfy-status" class="editor-status" role="status" aria-live="polite"></p>
     </section>
     <section id="backup-panel" class="panel" role="tabpanel" aria-labelledby="backup-tab" tabindex="0" hidden>
       <div class="panel-heading"><div><h2>Säkerhetskopia</h2>

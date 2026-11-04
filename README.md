@@ -212,6 +212,11 @@ edit configuration, node information, schedules or DTMF buttons, manage users, r
 log, or use backup/restore. Those controls are hidden for operators and the
 server rejects the requests with 403. Role `admin` can do everything.
 
+Admins can configure ntfy under **Inställningar → Notiser (ntfy)** by entering
+the server URL and topic and selecting node online/offline, SvxLink service,
+warning, and error events. Notifications are sent by the portal; no ntfy
+credentials are required for public topics.
+
 Every command sent to a node (DTMF sequence, service start/stop, SvxLink
 updates, configuration read/write, schedule read/write), node creation and user changes are recorded
 in the audit log with the acting user, time, node and outcome (queued,

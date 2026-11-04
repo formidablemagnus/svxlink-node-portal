@@ -15,15 +15,21 @@ from http.server import ThreadingHTTPServer
 
 from portal.server import (
     PortalHandler,
+    NTFY_QUEUE,
     _login_failures,
     claim_agent_commands,
     active_update_statuses,
+    check_offline_nodes,
     complete_agent_command,
     create_backup,
     database,
     enqueue_agent_command,
+    get_ntfy_settings,
     hash_password,
     provision_node,
+    queue_ntfy_notification,
+    save_ntfy_settings,
+    send_ntfy_notification,
     restore_backup,
     take_agent_command_result,
     validate_dtmf_command,
@@ -49,6 +55,191 @@ def session_header(base_url, basic_credentials):
 def fetch_asset(base_url, headers, name):
     with urlopen(Request(f"{base_url}/assets/{name}", headers=headers), timeout=2) as response:
         return response.read().decode("utf-8")
+
+
+class PortalNtfyTests(unittest.TestCase):
+    def test_enabled_event_is_sent_by_background_worker(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3")},
+        ):
+            save_ntfy_settings("admin", {
+                "server": "https://ntfy.example.net",
+                "topic": "svxlink-alerts",
+                "events": {
+                    "node_offline": True,
+                    "node_online": False,
+                    "service_stopped": False,
+                    "service_started": False,
+                    "log_warning": False,
+                    "log_error": False,
+                },
+            })
+            with patch("portal.server.send_ntfy_notification") as send:
+                queue_ntfy_notification("node_offline", "Nod Älgen")
+                NTFY_QUEUE.join()
+            send.assert_called_once_with(
+                "https://ntfy.example.net",
+                "svxlink-alerts",
+                "Nod offline",
+                "Nod Älgen",
+            )
+
+    def test_publishes_utf8_message_to_configured_topic(self):
+        with patch("portal.server.urlopen") as open_url:
+            send_ntfy_notification(
+                "https://ntfy.example.net/base",
+                "svxlink-alerts",
+                "Nod online",
+                "Nod Älgen online",
+            )
+        request = open_url.call_args.args[0]
+        self.assertEqual(request.full_url, "https://ntfy.example.net/base/svxlink-alerts")
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.data, "Nod Älgen online".encode("utf-8"))
+        self.assertEqual(request.get_header("Title"), "Nod online")
+
+    def test_settings_validate_and_persist(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3")},
+        ):
+            settings = {
+                "server": "https://ntfy.example.net/base/",
+                "topic": "svxlink-alerts",
+                "events": {
+                    "node_offline": True,
+                    "node_online": False,
+                    "service_stopped": False,
+                    "service_started": False,
+                    "log_warning": False,
+                    "log_error": False,
+                },
+            }
+            self.assertEqual(save_ntfy_settings("admin", settings), {
+                **settings,
+                "server": "https://ntfy.example.net/base",
+            })
+            self.assertEqual(get_ntfy_settings(), {
+                **settings,
+                "server": "https://ntfy.example.net/base",
+            })
+            with self.assertRaisesRegex(ValueError, "Ange både ntfy-server och ämne"):
+                save_ntfy_settings("admin", {
+                    **settings,
+                    "server": "",
+                })
+            with self.assertRaisesRegex(ValueError, "Serveradressen"):
+                save_ntfy_settings("admin", {
+                    **settings,
+                    "server": "https://user:password@ntfy.example.net",
+                })
+
+    def test_agent_status_and_new_log_events_trigger_notifications(self):
+        password = "this-is-a-long-test-password"
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {
+                "PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3"),
+                "PORTAL_ADMIN_USER": "admin",
+                "PORTAL_ADMIN_PASSWORD": password,
+            },
+        ):
+            node = provision_node("Notisnod")
+            server = ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://127.0.0.1:{server.server_port}"
+                admin_cookie = login_cookie(base_url, "admin", password)
+                settings = {
+                    "server": "https://ntfy.example.net",
+                    "topic": "svxlink-alerts",
+                    "events": {
+                        "node_offline": True,
+                        "node_online": True,
+                        "service_stopped": True,
+                        "service_started": True,
+                        "log_warning": True,
+                        "log_error": True,
+                    },
+                }
+                with urlopen(
+                    Request(
+                        f"{base_url}/api/ntfy-settings",
+                        data=json.dumps(settings).encode(),
+                        headers={
+                            "Cookie": admin_cookie,
+                            "Content-Type": "application/json",
+                        },
+                    ),
+                    timeout=2,
+                ) as response:
+                    self.assertEqual(json.loads(response.read())["settings"], settings)
+                with urlopen(
+                    Request(
+                        f"{base_url}/api/ntfy-settings",
+                        headers={"Cookie": admin_cookie},
+                    ),
+                    timeout=2,
+                ) as response:
+                    self.assertTrue(json.loads(response.read())["settings"]["events"]["node_offline"])
+
+                def agent_post(path, payload):
+                    request = Request(
+                        f"{base_url}{path}",
+                        data=json.dumps(payload).encode(),
+                        headers={
+                            "Authorization": f"Bearer {node['token']}",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    with urlopen(request, timeout=2) as response:
+                        self.assertEqual(response.status, 200)
+
+                with patch("portal.server.queue_ntfy_notification") as notify:
+                    agent_post("/api/v1/agent/status", {
+                        "active": False,
+                        "service_status": "okänt",
+                    })
+                    agent_post("/api/v1/agent/status", {
+                        "active": True,
+                        "service_status": "active",
+                    })
+                    agent_post("/api/v1/agent/status", {
+                        "active": False,
+                        "service_status": "inactive",
+                    })
+                    agent_post("/api/v1/agent/logs", {
+                        "lines": ["WARNING: test warning", "ERROR: test failure", "INFO: normal"],
+                    })
+                    with database() as connection:
+                        connection.execute(
+                            "UPDATE nodes SET last_seen = ? WHERE id = ?",
+                            ("2000-01-01T00:00:00+00:00", node["node_id"]),
+                        )
+                    check_offline_nodes()
+                    agent_post("/api/v1/agent/status", {
+                        "active": True,
+                        "service_status": "active",
+                    })
+                    self.assertEqual(
+                        [call.args[0] for call in notify.call_args_list],
+                        [
+                            "node_online",
+                            "service_stopped",
+                            "log_warning",
+                            "log_error",
+                            "node_offline",
+                            "node_online",
+                            "service_started",
+                        ],
+                    )
+                    self.assertTrue(all(call.args[1] == "Notisnod" for call in notify.call_args_list))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
 
 
 class PortalBackupTests(unittest.TestCase):

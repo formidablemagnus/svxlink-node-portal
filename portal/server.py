@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import hmac
+import http.client
 import json
 import logging
 import os
+import queue
 import re
 import secrets
 import shlex
@@ -17,7 +19,6 @@ import threading
 import time
 import urllib.request
 import uuid
-from typing import Any, NoReturn
 from collections import deque
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager, suppress
@@ -25,7 +26,10 @@ from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from typing import Any, NoReturn
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, quote, unquote, urlparse, urlsplit
+from urllib.request import Request, urlopen
 
 from portal.audio_udp import AudioUdpServer
 from portal.reflector import REFLECTOR_HUB
@@ -179,6 +183,22 @@ AUDIO_BACKLOG_CHUNKS = 100
 MAX_MIC_BUFFER_BYTES = 64 * 1024
 MAX_AUDIO_REQUEST_BYTES = 48 * 1024
 PTT_TIMEOUT_SECONDS = 1.5
+NTFY_EVENTS = {
+    "node_offline": "Nod offline",
+    "node_online": "Nod online",
+    "service_stopped": "SvxLink tjänst stoppad",
+    "service_started": "SvxLink tjänst startad",
+    "log_warning": "Ny varning i logg",
+    "log_error": "Nytt fel i logg",
+}
+NTFY_TOPIC_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
+LOG_ERROR_PATTERN = re.compile(r"\b(?:error|fatal|critical)\b|\bfel\b|\*{3}", re.IGNORECASE)
+LOG_WARNING_PATTERN = re.compile(
+    r"\b(?:warn(?:ing)?|varning)\b|UDP frame\(s\) lost", re.IGNORECASE
+)
+NTFY_QUEUE: queue.Queue[tuple[str, str, str, str]] = queue.Queue(maxsize=1000)
+_ntfy_worker_lock = threading.Lock()
+_ntfy_worker: threading.Thread | None = None
 
 
 class RadioHub:
@@ -481,6 +501,14 @@ def connect_database() -> sqlite3.Connection:
         )"""
     )
     connection.execute(
+        """CREATE TABLE IF NOT EXISTS ntfy_node_state (
+            node_id TEXT PRIMARY KEY,
+            online INTEGER NOT NULL,
+            service_active INTEGER,
+            updated_at TEXT NOT NULL
+        )"""
+    )
+    connection.execute(
         """CREATE TABLE IF NOT EXISTS dtmf_buttons (
             position INTEGER PRIMARY KEY,
             label TEXT NOT NULL,
@@ -662,6 +690,228 @@ def save_node_config(actor: str, payload: dict[str, Any]) -> dict[str, Any]:
             )
         record_audit(connection, actor, "node-config.update", config["repo_url"])
     return config
+
+
+def validate_ntfy_settings(payload: object) -> dict[str, Any]:
+    if not isinstance(payload, dict) or set(payload) != {"server", "topic", "events"}:
+        raise ValueError("ntfy-inställningarna har fel fält.")
+    server, topic, events = payload["server"], payload["topic"], payload["events"]
+    if not isinstance(server, str) or len(server) > 500:
+        raise ValueError("Serveradressen måste vara text på högst 500 tecken.")
+    if not isinstance(topic, str) or len(topic) > 64:
+        raise ValueError("Ämnet måste vara text på högst 64 tecken.")
+    server = server.strip().rstrip("/")
+    topic = topic.strip()
+    if server:
+        try:
+            parsed = urlsplit(server)
+            port = parsed.port
+            valid_server = (
+                parsed.scheme in ("http", "https")
+                and bool(parsed.netloc)
+                and parsed.hostname is not None
+                and parsed.username is None
+                and parsed.password is None
+                and (port is None or 1 <= port <= 65535)
+                and not parsed.query
+                and not parsed.fragment
+                and not any(character.isspace() for character in server)
+                and "\\" not in parsed.path
+                and all(part not in (".", "..") for part in parsed.path.split("/"))
+            )
+        except ValueError:
+            valid_server = False
+        if not valid_server:
+            raise ValueError(
+                "Serveradressen måste vara en HTTP- eller HTTPS-adress utan "
+                "inloggningsuppgifter, query eller fragment."
+            )
+    if topic and not NTFY_TOPIC_PATTERN.fullmatch(topic):
+        raise ValueError("Ämnet får bara innehålla bokstäver, siffror, bindestreck och understreck.")
+    if not isinstance(events, dict) or set(events) != set(NTFY_EVENTS):
+        raise ValueError("Välj giltiga notishändelser.")
+    if any(type(enabled) is not bool for enabled in events.values()):
+        raise ValueError("Varje notishändelse måste vara aktiverad eller avstängd.")
+    if any(events.values()) and (not server or not topic):
+        raise ValueError("Ange både ntfy-server och ämne när notiser är aktiverade.")
+    return {"server": server, "topic": topic, "events": dict(events)}
+
+
+def get_ntfy_settings() -> dict[str, Any]:
+    with database() as connection:
+        stored = {
+            row["key"]: row["value"]
+            for row in connection.execute(
+                "SELECT key, value FROM portal_settings WHERE key LIKE 'ntfy.%'"
+            ).fetchall()
+        }
+    try:
+        events = json.loads(stored["ntfy.events"]) if "ntfy.events" in stored else {
+            event: False for event in NTFY_EVENTS
+        }
+    except json.JSONDecodeError as exc:
+        logging.error("Ogiltiga ntfy-händelser i portalinställningarna.")
+        raise RuntimeError("ntfy-händelserna i portalinställningarna är ogiltiga.") from exc
+    if not isinstance(events, dict) or set(events) != set(NTFY_EVENTS):
+        logging.error("Ogiltiga ntfy-händelser i portalinställningarna.")
+        raise RuntimeError("ntfy-händelserna i portalinställningarna är ogiltiga.")
+    settings = {
+        "server": stored.get("ntfy.server", ""),
+        "topic": stored.get("ntfy.topic", ""),
+        "events": events,
+    }
+    try:
+        return validate_ntfy_settings(settings)
+    except ValueError as exc:
+        logging.error("Ogiltiga ntfy-inställningar i portaldatabasen: %s", exc)
+        raise RuntimeError("ntfy-inställningarna i portaldatabasen är ogiltiga.") from exc
+
+
+def save_ntfy_settings(actor: str, payload: object) -> dict[str, Any]:
+    settings = validate_ntfy_settings(payload)
+    values = {
+        "ntfy.server": settings["server"],
+        "ntfy.topic": settings["topic"],
+        "ntfy.events": json.dumps(settings["events"], sort_keys=True),
+    }
+    with database() as connection:
+        for key, value in values.items():
+            connection.execute(
+                "INSERT INTO portal_settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+        record_audit(connection, actor, "ntfy-settings.update", settings["server"])
+    return settings
+
+
+def send_ntfy_notification(server: str, topic: str, title: str, message: str) -> None:
+    request = Request(
+        f"{server}/{quote(topic, safe='')}",
+        data=message.encode("utf-8"),
+        headers={"Title": title, "Content-Type": "text/plain; charset=utf-8"},
+        method="POST",
+    )
+    with urlopen(request, timeout=10) as response:
+        response.read(1024)
+
+
+def ntfy_worker() -> None:
+    while True:
+        server, topic, title, message = NTFY_QUEUE.get()
+        try:
+            send_ntfy_notification(server, topic, title, message)
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError, http.client.HTTPException) as exc:
+            logging.error("Kunde inte skicka ntfy-notis till %s: %s", server, exc)
+        finally:
+            NTFY_QUEUE.task_done()
+
+
+def queue_ntfy_notification(event: str, node_name: str, detail: str = "") -> None:
+    if event not in NTFY_EVENTS:
+        raise ValueError(f"Okänd ntfy-händelse: {event}")
+    settings = get_ntfy_settings()
+    if not settings["events"][event]:
+        return
+    title = NTFY_EVENTS[event]
+    message = node_name if not detail else f"{node_name}: {detail}"
+    try:
+        NTFY_QUEUE.put_nowait((settings["server"], settings["topic"], title, message))
+    except queue.Full:
+        logging.error("ntfy-kön är full; notisen '%s' för noden %s tappades.", title, node_name)
+        return
+    global _ntfy_worker
+    with _ntfy_worker_lock:
+        if _ntfy_worker is None or not _ntfy_worker.is_alive():
+            _ntfy_worker = threading.Thread(target=ntfy_worker, name="ntfy-notifications", daemon=True)
+            _ntfy_worker.start()
+
+
+def record_status_notifications(
+    connection: sqlite3.Connection,
+    node_id: str,
+    node_name: str,
+    service_active: bool | None,
+    previous_last_seen: str | None,
+    now: datetime,
+) -> list[tuple[str, str]]:
+    previous = connection.execute(
+        "SELECT online, service_active FROM ntfy_node_state WHERE node_id = ?",
+        (node_id,),
+    ).fetchone()
+    previous_online = bool(previous["online"]) if previous else False
+    events: list[tuple[str, str]] = []
+    if previous_online:
+        try:
+            seen_at = datetime.fromisoformat(previous_last_seen) if previous_last_seen else None
+        except ValueError:
+            logging.error("Ogiltig last_seen-tid för nod %s.", node_id)
+            seen_at = None
+        if seen_at is None or (now - seen_at).total_seconds() > ONLINE_WINDOW_SECONDS:
+            events.append(("node_offline", node_name))
+            previous_online = False
+    elif previous is None and previous_last_seen:
+        try:
+            seen_at = datetime.fromisoformat(previous_last_seen)
+            previous_online = (now - seen_at).total_seconds() <= ONLINE_WINDOW_SECONDS
+        except ValueError:
+            logging.error("Ogiltig last_seen-tid för nod %s.", node_id)
+    if not previous_online:
+        events.append(("node_online", node_name))
+    if service_active is not None and previous is not None and previous["service_active"] is not None:
+        if bool(previous["service_active"]) != service_active:
+            event = "service_started" if service_active else "service_stopped"
+            events.append((event, node_name))
+    stored_service_active = service_active
+    if stored_service_active is None and previous is not None:
+        stored_service_active = previous["service_active"]
+    connection.execute(
+        "INSERT INTO ntfy_node_state (node_id, online, service_active, updated_at) "
+        "VALUES (?, 1, ?, ?) ON CONFLICT(node_id) DO UPDATE SET "
+        "online = 1, service_active = COALESCE(excluded.service_active, ntfy_node_state.service_active), "
+        "updated_at = excluded.updated_at",
+        (
+            node_id,
+            int(stored_service_active) if stored_service_active is not None else None,
+            now.isoformat(),
+        ),
+    )
+    return events
+
+
+def check_offline_nodes(now: datetime | None = None) -> None:
+    current_time = now or datetime.now(timezone.utc)
+    notifications: list[tuple[str, str]] = []
+    with database() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        rows = connection.execute(
+            "SELECT n.id, n.name, n.last_seen FROM nodes n "
+            "JOIN ntfy_node_state s ON s.node_id = n.id WHERE s.online = 1"
+        ).fetchall()
+        for row in rows:
+            try:
+                seen_at = datetime.fromisoformat(row["last_seen"]) if row["last_seen"] else None
+            except ValueError:
+                logging.error("Ogiltig last_seen-tid för nod %s.", row["id"])
+                continue
+            if seen_at is None or (current_time - seen_at).total_seconds() <= ONLINE_WINDOW_SECONDS:
+                continue
+            connection.execute(
+                "UPDATE ntfy_node_state SET online = 0, updated_at = ? WHERE node_id = ?",
+                (current_time.isoformat(), row["id"]),
+            )
+            notifications.append(("node_offline", row["name"]))
+    for event, node_name in notifications:
+        queue_ntfy_notification(event, node_name)
+
+
+def offline_monitor_loop() -> None:
+    while True:
+        try:
+            check_offline_nodes()
+        except sqlite3.Error as exc:
+            logging.error("Kunde inte kontrollera offline-noder för ntfy: %s", exc)
+        time.sleep(5)
 
 
 def build_install_command(config: dict[str, Any], node_id: str, token: str) -> str | None:
@@ -1305,6 +1555,7 @@ def restore_backup(actor: str, backup: object) -> dict[str, int]:
     with database() as connection:
         connection.execute("BEGIN IMMEDIATE")
         connection.execute("DELETE FROM agent_commands")
+        connection.execute("DELETE FROM ntfy_node_state")
         for table, columns in BACKUP_TABLES.items():
             connection.execute(f"DELETE FROM {table}")
             names = [name for name, _ in columns]
@@ -1454,6 +1705,7 @@ def delete_node(actor: str, node_id: str) -> bool:
             return False
         connection.execute("DELETE FROM agent_commands WHERE node_id = ?", (node_id,))
         connection.execute("DELETE FROM service_log WHERE node_id = ?", (node_id,))
+        connection.execute("DELETE FROM ntfy_node_state WHERE node_id = ?", (node_id,))
         record_audit(
             connection, actor, "node.delete", node["name"], node_id, node["name"]
         )
@@ -2086,6 +2338,9 @@ class PortalHandler(BaseHTTPRequestHandler):
         elif path == "/api/node-config":
             if self.require_admin(admin_only=True):
                 self.send_json(200, {"config": get_node_config()})
+        elif path == "/api/ntfy-settings":
+            if self.require_admin(admin_only=True):
+                self.send_json(200, {"settings": get_ntfy_settings()})
         elif path == "/api/audit":
             if self.require_admin(admin_only=True):
                 query = parse_qs(urlparse(self.path).query)
@@ -2375,6 +2630,18 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": str(exc)})
                 return
             self.send_json(200, {"config": config})
+            return
+        if path == "/api/ntfy-settings":
+            if not self.require_admin(admin_only=True):
+                return
+            try:
+                settings = save_ntfy_settings(
+                    self.actor, self.read_json_body(MAX_REQUEST_BYTES)
+                )
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            self.send_json(200, {"settings": settings})
             return
         if path == "/api/restore":
             if not self.require_admin(admin_only=True):
@@ -2766,6 +3033,16 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             LIVE_LOGS.add(agent_node_id, lines)
             touch_node(agent_node_id)
+            with database() as connection:
+                node = connection.execute(
+                    "SELECT name FROM nodes WHERE id = ?", (agent_node_id,)
+                ).fetchone()
+            if node is not None:
+                for line in lines:
+                    if LOG_ERROR_PATTERN.search(line):
+                        queue_ntfy_notification("log_error", node["name"], line)
+                    elif LOG_WARNING_PATTERN.search(line):
+                        queue_ntfy_notification("log_warning", node["name"], line)
             self.send_json(200, {"ok": True})
             return
 
@@ -2783,15 +3060,33 @@ class PortalHandler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": str(exc)})
             return
         LIVE_LOGS.seed(agent_node_id, status.get("logs") or [])
-        now = datetime.now(timezone.utc).isoformat()
+        received_at = datetime.now(timezone.utc)
+        notifications: list[tuple[str, str]] = []
         with database() as connection:
-            connection.execute(
-                "UPDATE nodes SET status_json = ?, last_seen = ? WHERE id = ?",
-                (json.dumps(status, ensure_ascii=False), now, agent_node_id),
-            )
+            connection.execute("BEGIN IMMEDIATE")
+            node = connection.execute(
+                "SELECT name, last_seen FROM nodes WHERE id = ?", (agent_node_id,)
+            ).fetchone()
+            if node is not None:
+                notifications = record_status_notifications(
+                    connection,
+                    agent_node_id,
+                    node["name"],
+                    status["active"]
+                    if status["service_status"].lower() in ("active", "inactive", "failed")
+                    else None,
+                    node["last_seen"],
+                    received_at,
+                )
+                connection.execute(
+                    "UPDATE nodes SET status_json = ?, last_seen = ? WHERE id = ?",
+                    (json.dumps(status, ensure_ascii=False), received_at.isoformat(), agent_node_id),
+                )
+        for event, message in notifications:
+            queue_ntfy_notification(event, message)
         self.send_json(200, {
             "ok": True,
-            "received_at": now,
+            "received_at": received_at.isoformat(),
             "watch": RADIO_HUB.watched(agent_node_id),
         })
 
@@ -2803,6 +3098,7 @@ def serve() -> None:
     host = os.environ.get("PORTAL_HOST", "127.0.0.1")
     port = int(os.environ.get("PORTAL_PORT", "8080"))
     server = ThreadingHTTPServer((host, port), PortalHandler)
+    threading.Thread(target=offline_monitor_loop, name="ntfy-offline-monitor", daemon=True).start()
     start_audio_udp()
     logging.info("Portal lyssnar på %s:%s.", host, port)
     try:
