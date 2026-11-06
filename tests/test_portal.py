@@ -214,7 +214,13 @@ class PortalNtfyTests(unittest.TestCase):
                         "service_status": "inactive",
                     })
                     agent_post("/api/v1/agent/logs", {
-                        "lines": ["WARNING: test warning", "ERROR: test failure", "INFO: normal"],
+                        "lines": [
+                            "WARNING: test warning",
+                            "ERROR: test failure",
+                            "INFO: normal",
+                            "Fri Nov  6 15:35:36 2026: ReflectorLogic: UDP frame(s) lost. "
+                            "Expected seq=62133 but received 62134. Resetting next expected sequence number to 62135",
+                        ],
                     })
                     with database() as connection:
                         connection.execute(
@@ -233,6 +239,7 @@ class PortalNtfyTests(unittest.TestCase):
                             "service_stopped",
                             "log_warning",
                             "log_error",
+                            "log_warning",
                             "node_offline",
                             "node_online",
                             "service_started",

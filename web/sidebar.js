@@ -42,7 +42,7 @@
   }
 
   const ERROR_RE = /\b(error|fatal|critical|\*{3})\b|\bfel\b/i;
-  const WARNING_RE = /\b(warn(ing)?|varning)\b/i;
+  const WARNING_RE = /\b(warn(ing)?|varning)\b|UDP frame\(s\) lost/i;
 
   /** @param {string} line @returns {string} */
   function logLevel(line) {
