@@ -267,6 +267,10 @@ class PortalBackupTests(unittest.TestCase):
                         (credentials["node_id"], "2025-01-02T03:04:05+00:00",
                          "admin", "Testad service"),
                     )
+                    connection.execute(
+                        "INSERT INTO user_audio_settings (username, volume, mic_gain) "
+                        "VALUES (?, ?, ?)", ("admin", 12, 24),
+                    )
                 backup = create_backup("admin")
             with patch.dict(os.environ, {**env, "PORTAL_DATABASE": str(Path(directory) / "b.sqlite3")}):
                 with self.assertRaises(ValueError):
@@ -274,6 +278,7 @@ class PortalBackupTests(unittest.TestCase):
                 counts = restore_backup("admin", json.loads(json.dumps(backup)))
                 self.assertEqual(counts["nodes"], 1)
                 self.assertEqual(counts["service_log"], 1)
+                self.assertEqual(counts["user_audio_settings"], 1)
                 with database() as connection:
                     row = connection.execute("SELECT id, name FROM nodes").fetchone()
                     token_hash = hashlib.sha256(credentials["token"].encode()).hexdigest()
@@ -283,20 +288,112 @@ class PortalBackupTests(unittest.TestCase):
                     service_entry = connection.execute(
                         "SELECT node_id, actor, entry FROM service_log"
                     ).fetchone()
+                    audio_settings = connection.execute(
+                        "SELECT username, volume, mic_gain FROM user_audio_settings"
+                    ).fetchone()
                 self.assertEqual(row["id"], credentials["node_id"])
                 self.assertIsNotNone(found)
                 self.assertEqual(
                     tuple(service_entry),
                     (credentials["node_id"], "admin", "Testad service"),
                 )
+                self.assertEqual(tuple(audio_settings), ("admin", 12, 24))
                 old_backup = json.loads(json.dumps(backup))
                 del old_backup["tables"]["service_log"]
+                del old_backup["tables"]["user_audio_settings"]
                 restore_backup("admin", old_backup)
                 with database() as connection:
                     self.assertEqual(
                         connection.execute("SELECT COUNT(*) FROM service_log").fetchone()[0],
                         0,
                     )
+                    self.assertEqual(
+                        connection.execute("SELECT COUNT(*) FROM user_audio_settings").fetchone()[0],
+                        0,
+                    )
+                bad_backup = json.loads(json.dumps(backup))
+                bad_backup["tables"]["user_audio_settings"][0]["volume"] = 21
+                with self.assertRaises(ValueError):
+                    restore_backup("admin", bad_backup)
+
+
+class PortalAudioSettingsTests(unittest.TestCase):
+    def test_audio_settings_are_private_persistent_and_validated(self):
+        password = "this-is-a-long-test-password"
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {
+                "PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3"),
+                "PORTAL_ADMIN_USER": "admin",
+                "PORTAL_ADMIN_PASSWORD": password,
+            },
+        ):
+            server = ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f"http://127.0.0.1:{server.server_port}"
+                admin = login_cookie(base, "admin", password)
+
+                def call(path, cookie=None, payload=None, method=None):
+                    headers = {"Content-Type": "application/json"}
+                    if cookie:
+                        headers["Cookie"] = cookie
+                    request = Request(
+                        base + path, headers=headers,
+                        data=json.dumps(payload).encode() if payload is not None else None,
+                        method=method,
+                    )
+                    try:
+                        with urlopen(request, timeout=5) as response:
+                            return response.status, json.loads(response.read())
+                    except HTTPError as error:
+                        return error.code, json.loads(error.read())
+
+                self.assertEqual(call("/api/audio-settings")[0], 401)
+                self.assertEqual(call("/api/audio-settings", payload={"volume": 0.5})[0], 401)
+                self.assertEqual(call("/api/audio-settings", admin)[1]["settings"],
+                                 {"volume": 0.8, "mic_gain": 0.4})
+                self.assertEqual(call("/api/users", admin, {
+                    "username": "Olle", "password": "Operator-password-1", "role": "operator",
+                })[0], 201)
+                operator = login_cookie(base, "olle", "Operator-password-1")
+                self.assertEqual(call("/api/audio-settings", admin, {"volume": 0.25})[0], 200)
+                self.assertEqual(call("/api/audio-settings", operator, {"mic_gain": 1.5})[0], 200)
+                self.assertEqual(call("/api/audio-settings", operator, {"volume": 0})[0], 200)
+                self.assertEqual(call("/api/audio-settings", admin)[1]["settings"],
+                                 {"volume": 0.25, "mic_gain": 0.4})
+                self.assertEqual(call("/api/audio-settings", operator)[1]["settings"],
+                                 {"volume": 0, "mic_gain": 1.5})
+                new_session = login_cookie(base, "OLLE", "Operator-password-1")
+                self.assertEqual(call("/api/audio-settings", new_session)[1]["settings"],
+                                 {"volume": 0, "mic_gain": 1.5})
+                self.assertEqual(call("/api/users/olle", admin, {
+                    "password": "New-operator-password-2",
+                })[0], 200)
+                operator = login_cookie(base, "olle", "New-operator-password-2")
+                self.assertEqual(call("/api/audio-settings", operator)[1]["settings"],
+                                 {"volume": 0, "mic_gain": 1.5})
+                for invalid in (
+                    {}, {"username": "admin"}, {"volume": True}, {"volume": -0.05},
+                    {"volume": 1.05}, {"volume": 0.21}, {"mic_gain": 0},
+                    {"mic_gain": 2.05}, {"mic_gain": "0.5"}, {"volume": float("nan")},
+                    {"volume": 10**400},
+                ):
+                    self.assertEqual(call("/api/audio-settings", operator, invalid)[0], 400, invalid)
+                self.assertEqual(call("/api/audio-settings", operator)[1]["settings"],
+                                 {"volume": 0, "mic_gain": 1.5})
+                self.assertEqual(call("/api/users/olle", admin, method="DELETE")[0], 200)
+                self.assertEqual(call("/api/users", admin, {
+                    "username": "olle", "password": "Operator-password-1", "role": "operator",
+                })[0], 201)
+                recreated = login_cookie(base, "olle", "Operator-password-1")
+                self.assertEqual(call("/api/audio-settings", recreated)[1]["settings"],
+                                 {"volume": 0.8, "mic_gain": 0.4})
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
 
 
 class PortalServiceLogTests(unittest.TestCase):

@@ -12,13 +12,7 @@
   const lockBox = document.getElementById('audio-ptt-lock');
   const volume = document.getElementById('audio-volume');
   const micGain = document.getElementById('audio-mic-gain');
-  try {
-    const saved = localStorage.getItem('svx-mic-gain');
-    if (saved !== null) micGain.value = saved;
-  } catch (error) { /* localStorage not available */ }
-  micGain.addEventListener('input', () => {
-    try { localStorage.setItem('svx-mic-gain', micGain.value); } catch (error) { /* ignore */ }
-  });
+  const settingsStatus = document.getElementById('audio-settings-status');
   const stateText = document.getElementById('audio-state');
   const errorText = document.getElementById('audio-error');
   let capabilities = {listen: false, talk: false, ptt: false, issues: [], error: '', mic_frames: 0};
@@ -52,11 +46,73 @@
   const setState = (text) => { stateText.textContent = text; };
   const setError = (text) => { errorText.textContent = text || ''; };
 
+  const changedSettings = new Set();
+  let pendingSettings = {};
+  let settingsTimer = null;
+  let savingSettings = false;
+  let settingsReady = false;
+
+  async function settingsRequest(options = {}) {
+    const response = await fetch('/api/audio-settings', {cache: 'no-store', ...options});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    return data.settings;
+  }
+
+  async function loadSettings() {
+    try {
+      const settings = await settingsRequest();
+      if (!changedSettings.has('volume')) {
+        volume.value = settings.volume;
+        if (gain) gain.gain.value = Number(volume.value);
+      }
+      if (!changedSettings.has('mic_gain')) micGain.value = settings.mic_gain;
+    } catch (error) {
+      settingsStatus.textContent = `Kunde inte hämta ljudinställningar: ${error.message}`;
+    } finally {
+      settingsReady = true;
+      render();
+      maybeAutoConnect();
+    }
+  }
+
+  async function flushSettings() {
+    clearTimeout(settingsTimer);
+    settingsTimer = null;
+    if (savingSettings) return;
+    savingSettings = true;
+    while (Object.keys(pendingSettings).length) {
+      const settings = pendingSettings;
+      pendingSettings = {};
+      try {
+        await settingsRequest({
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(settings), keepalive: true,
+        });
+        settingsStatus.textContent = '';
+      } catch (error) {
+        pendingSettings = {...settings, ...pendingSettings};
+        settingsStatus.textContent = `Kunde inte spara ljudinställningar: ${error.message}. Ändra ett reglage för att försöka igen.`;
+        break;
+      }
+    }
+    savingSettings = false;
+  }
+
+  function queueSetting(name, value) {
+    changedSettings.add(name);
+    pendingSettings[name] = Number(value);
+    clearTimeout(settingsTimer);
+    settingsTimer = setTimeout(flushSettings, 300);
+  }
+
+  loadSettings();
+
   function render() {
     panel.hidden = !(capabilities.listen || capabilities.talk);
-    connectButton.disabled = !capabilities.listen || !nodeOnline;
+    connectButton.disabled = !settingsReady || !capabilities.listen || !nodeOnline;
     connectButton.textContent = connected ? 'Koppla från ljud' : 'Anslut ljud';
-    pttButton.disabled = !capabilities.talk || !nodeOnline;
+    pttButton.disabled = !settingsReady || !capabilities.talk || !nodeOnline;
     pttButton.classList.toggle('ptt-active', pttSending);
     const problems = [...(capabilities.issues || []), capabilities.error].filter(Boolean).join(' ');
     if (problems) setError(problems);
@@ -121,7 +177,7 @@
   }
 
   function connect() {
-    if (connected) return;
+    if (connected || !settingsReady) return;
     // Spela på exakt 16 kHz så att inga ljudbitar omsamplas var för sig.
     context = new (window.AudioContext || window.webkitAudioContext)({sampleRate: WIRE_RATE});
     gain = context.createGain();
@@ -301,7 +357,13 @@
     if (context && context.state === 'suspended') context.resume();
   });
   connectButton.addEventListener('click', () => (connected ? disconnect() : connect()));
-  volume.addEventListener('input', () => { if (gain) gain.gain.value = Number(volume.value); });
+  volume.addEventListener('input', () => {
+    if (gain) gain.gain.value = Number(volume.value);
+    queueSetting('volume', volume.value);
+  });
+  micGain.addEventListener('input', () => queueSetting('mic_gain', micGain.value));
+  volume.addEventListener('change', flushSettings);
+  micGain.addEventListener('change', flushSettings);
   pttButton.addEventListener('pointerdown', (event) => {
     event.preventDefault();
     pttButton.setPointerCapture(event.pointerId);
@@ -322,7 +384,14 @@
   });
   pttButton.addEventListener('blur', releasePtt);
   window.addEventListener('blur', releasePtt);
-  window.addEventListener('pagehide', () => { forceReleasePtt(); disconnect(); });
+  window.addEventListener('pagehide', () => { flushSettings(); forceReleasePtt(); disconnect(); });
+
+  function maybeAutoConnect() {
+    if (settingsReady && panel.dataset.autoconnect === '1' && !autoTried && capabilities.listen && nodeOnline) {
+      autoTried = true;
+      connect();
+    }
+  }
 
   window.SvxAudio = {
     /** @param {Object|null} udpAudio @param {boolean} online @returns {void} */
@@ -331,10 +400,7 @@
       nodeOnline = Boolean(online);
       if (!nodeOnline && connected) setState('Noden är offline');
       render();
-      if (panel.dataset.autoconnect === '1' && !autoTried && capabilities.listen && nodeOnline) {
-        autoTried = true;
-        connect();
-      }
+      maybeAutoConnect();
     },
   };
 })();

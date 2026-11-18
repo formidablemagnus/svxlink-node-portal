@@ -305,6 +305,12 @@ access requires HTTPS or `localhost`). Audio is relayed through the portal's
 existing HTTP connection (16 kHz mono PCM), so no extra ports have to be opened
 towards the portal. Only one user can transmit at a time and every transmission
 start is written to the audit log.
+Playback and microphone volume are saved per portal user and shared between
+the node page and the remote-operation window on all devices. New users start
+at 80% playback volume and 40% microphone gain. The previous browser-local
+microphone setting is not imported because it cannot be associated safely with
+an individual account. Audio settings are included in portal backups; restoring
+older backups resets them to the defaults.
 
 ```ini
 [Rx1]

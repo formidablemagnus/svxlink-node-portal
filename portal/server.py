@@ -9,6 +9,7 @@ import http.client
 import ipaddress
 import json
 import logging
+import math
 import os
 import queue
 import re
@@ -522,6 +523,13 @@ def connect_database() -> sqlite3.Connection:
             password_hash TEXT NOT NULL,
             role TEXT NOT NULL,
             created_at TEXT NOT NULL
+        )"""
+    )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS user_audio_settings (
+            username TEXT PRIMARY KEY COLLATE NOCASE,
+            volume INTEGER NOT NULL,
+            mic_gain INTEGER NOT NULL
         )"""
     )
     connection.execute(
@@ -1476,6 +1484,7 @@ BACKUP_TABLES = {
                   ("outcome", True), ("command_id", False)),
     "service_log": (("id", True), ("node_id", True), ("created_at", True),
                     ("actor", True), ("entry", True)),
+    "user_audio_settings": (("username", True), ("volume", True), ("mic_gain", True)),
 }
 
 
@@ -1508,7 +1517,7 @@ def validate_backup(backup: object) -> dict[str, list[dict[str, Any]]]:
     clean = {}
     for table, columns in BACKUP_TABLES.items():
         rows = tables.get(table)
-        if table == "service_log" and table not in tables:
+        if table in ("service_log", "user_audio_settings") and table not in tables:
             rows = []
         if not isinstance(rows, list):
             raise ValueError(f"Säkerhetskopian saknar tabellen {table}.")
@@ -1520,6 +1529,9 @@ def validate_backup(backup: object) -> dict[str, list[dict[str, Any]]]:
                 value = row[name]
                 numeric = name in ("id", "position") and table in (
                     "audit_log", "dtmf_buttons", "service_log"
+                )
+                numeric = numeric or (
+                    table == "user_audio_settings" and name in ("volume", "mic_gain")
                 )
                 if numeric:
                     valid = isinstance(value, int) and not isinstance(value, bool)
@@ -1540,6 +1552,16 @@ def validate_backup(backup: object) -> dict[str, list[dict[str, Any]]]:
     for user in clean["portal_users"]:
         if user["role"] not in USER_ROLES or not USERNAME_PATTERN.fullmatch(user["username"]):
             raise ValueError("Säkerhetskopian innehåller en ogiltig användare.")
+    audio_users = set()
+    for settings in clean["user_audio_settings"]:
+        username = settings["username"].lower()
+        if (
+            not username or username in audio_users
+            or not 0 <= settings["volume"] <= 20
+            or not 1 <= settings["mic_gain"] <= 40
+        ):
+            raise ValueError("Säkerhetskopian innehåller ogiltiga ljudinställningar.")
+        audio_users.add(username)
     if len(clean["dtmf_buttons"]) > MAX_DTMF_BUTTONS:
         raise ValueError("Säkerhetskopian innehåller för många DTMF-knappar.")
     for table, key in (("nodes", "id"), ("portal_users", "username")):
@@ -1693,6 +1715,9 @@ def delete_user(actor: str, username: str) -> bool:
         connection.execute(
             "DELETE FROM sessions WHERE username = ? COLLATE NOCASE", (username,)
         )
+        connection.execute(
+            "DELETE FROM user_audio_settings WHERE username = ? COLLATE NOCASE", (username,)
+        )
         record_audit(connection, actor, "user.delete", username)
     return True
 
@@ -1718,6 +1743,45 @@ def delete_node(actor: str, node_id: str) -> bool:
 
 def _same_text(first: str, second: str) -> bool:
     return hmac.compare_digest(first.encode("utf-8"), second.encode())
+
+
+def get_audio_settings(username: str) -> dict[str, float]:
+    with database() as connection:
+        row = connection.execute(
+            "SELECT volume, mic_gain FROM user_audio_settings WHERE username = ? COLLATE NOCASE",
+            (username,),
+        ).fetchone()
+    return {
+        "volume": row["volume"] / 20 if row else 0.8,
+        "mic_gain": row["mic_gain"] / 20 if row else 0.4,
+    }
+
+
+def save_audio_settings(username: str, payload: object) -> None:
+    if not isinstance(payload, dict) or not payload or set(payload) - {"volume", "mic_gain"}:
+        raise ValueError("Ange giltiga ljudinställningar.")
+    values = {}
+    for name, value in payload.items():
+        if (
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            or not (0 if name == "volume" else 0.05) <= value <= (1 if name == "volume" else 2)
+            or not math.isfinite(value)
+            or not math.isclose(value * 20, round(value * 20), abs_tol=1e-8)
+        ):
+            raise ValueError("Ljudvolymen måste vara inom reglagets intervall och steg.")
+        values[name] = round(value * 20)
+    with database() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            "INSERT OR IGNORE INTO user_audio_settings (username, volume, mic_gain) "
+            "VALUES (?, 16, 8)",
+            (username,),
+        )
+        for name, value in values.items():
+            connection.execute(
+                f"UPDATE user_audio_settings SET {name} = ? WHERE username = ? COLLATE NOCASE",
+                (value, username),
+            )
 
 
 def authenticate(username: str, password: str) -> tuple[str, str] | None:
@@ -2369,6 +2433,8 @@ class PortalHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif path == "/api/me":
             self.send_json(200, {"username": self.actor, "role": self.role})
+        elif path == "/api/audio-settings":
+            self.send_json(200, {"settings": get_audio_settings(self.actor)})
         elif path == "/api/users":
             if self.require_admin(admin_only=True):
                 self.send_json(200, {"users": list_users()})
@@ -2630,6 +2696,16 @@ class PortalHandler(BaseHTTPRequestHandler):
         if path == "/api/logout":
             destroy_session(self.session_token())
             self.send_json(200, {"ok": True}, [self.session_cookie("", 0)])
+            return
+        if path == "/api/audio-settings":
+            if not self.require_admin():
+                return
+            try:
+                save_audio_settings(self.actor, self.read_json_body(MAX_REQUEST_BYTES))
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            self.send_json(200, {"settings": get_audio_settings(self.actor)})
             return
         if path == "/api/nodes":
             if not self.require_admin(admin_only=True):
