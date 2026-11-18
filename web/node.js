@@ -13,7 +13,7 @@ const popout = document.getElementById('remote-popout');
 popout.href = `/nodes/${encodeURIComponent(nodeId)}/remote`;
 popout.addEventListener('click', (event) => {
   event.preventDefault();
-  window.open(popout.href, `svx-remote-${nodeId}`, 'popup=yes,width=360,height=420');
+  window.open(popout.href, `svx-remote-${nodeId}`, 'popup=yes,width=360,height=640');
 });
 const dtmfForm = document.getElementById('dtmf-form');
 const dtmfInput = document.getElementById('dtmf-sequence');
