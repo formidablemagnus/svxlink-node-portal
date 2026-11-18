@@ -46,6 +46,17 @@ logins for a username the login is blocked for 5 minutes. The portal
 requires a password of at least 16 characters; protect the portal database and
 environment file.
 
+Successful, failed, blocked and malformed login requests are recorded in the
+admin audit log with the connecting IP address; passwords are never recorded.
+By default this is the direct peer address. To record client addresses behind a
+single trusted reverse proxy, set `PORTAL_TRUSTED_PROXY` to the proxy's exact IP
+address in `/etc/default/svxlink-node-portal` and restart the portal. Configure
+the proxy to overwrite or append the real client address as the last entry in
+`X-Forwarded-For`. Only headers from that proxy are trusted; missing or invalid
+headers are reported in the server log and the proxy address is recorded
+instead. The proxy must not be bypassable by untrusted clients using the same
+source address. Login throttling continues to use the direct peer address.
+
 ## Install with systemd
 
 The installer follows the same workflow as the SvxLink webpanel: choose the
@@ -221,7 +232,8 @@ Every command sent to a node (DTMF sequence, service start/stop, SvxLink
 updates, configuration read/write, schedule read/write), node creation and user changes are recorded
 in the audit log with the acting user, time, node and outcome (queued,
 completed, failed, expired). Configuration contents are never logged, only the
-document name. The log keeps the latest 5000 entries; the DTMF sequences sent
+document name. Login attempts and their IP addresses are also included. The log
+keeps the latest 5000 entries; the DTMF sequences sent
 are stored in clear text.
 
 ### Node service log

@@ -32,6 +32,7 @@ from portal.server import (
     send_ntfy_notification,
     restore_backup,
     take_agent_command_result,
+    trusted_proxy_address,
     validate_dtmf_command,
     validate_status,
 )
@@ -1757,6 +1758,86 @@ class PortalNodeConfigTests(unittest.TestCase):
 
 
 class PortalLoginTests(unittest.TestCase):
+    def test_trusted_proxy_configuration_requires_an_ip_address(self):
+        with patch.dict(os.environ, {"PORTAL_TRUSTED_PROXY": ""}):
+            self.assertIsNone(trusted_proxy_address())
+        with patch.dict(os.environ, {"PORTAL_TRUSTED_PROXY": "2001:db8::1"}):
+            self.assertEqual(str(trusted_proxy_address()), "2001:db8::1")
+        with patch.dict(os.environ, {"PORTAL_TRUSTED_PROXY": "invalid"}):
+            with self.assertRaisesRegex(RuntimeError, "PORTAL_TRUSTED_PROXY"):
+                trusted_proxy_address()
+
+    def test_login_audit_records_outcomes_and_trusted_client_ip(self):
+        import http.client
+
+        password = "this-is-a-long-test-password"
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {
+                "PORTAL_DATABASE": str(Path(directory) / "portal.sqlite3"),
+                "PORTAL_ADMIN_USER": "admin",
+                "PORTAL_ADMIN_PASSWORD": password,
+                "PORTAL_TRUSTED_PROXY": "",
+            },
+        ):
+            server = ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                def request(method, path, body=None, headers=None):
+                    conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+                    conn.request(method, path, body, headers or {})
+                    response = conn.getresponse()
+                    result = response.status, response.getheader("Set-Cookie"), response.read()
+                    conn.close()
+                    return result
+
+                def login(username, secret, forwarded=None):
+                    headers = {"Content-Type": "application/json"}
+                    if forwarded is not None:
+                        headers["X-Forwarded-For"] = forwarded
+                    body = json.dumps({"username": username, "password": secret})
+                    return request("POST", "/api/login", body, headers)
+
+                self.assertEqual(request("POST", "/api/login", "{")[0], 400)
+                self.assertEqual(login("ADMIN", "incorrect-secret", "198.51.100.10")[0], 401)
+                status, cookie, _ = login("ADMIN", password, "198.51.100.10")
+                self.assertEqual(status, 200)
+                self.assertEqual(request("GET", "/api/audit")[0], 401)
+
+                os.environ["PORTAL_TRUSTED_PROXY"] = "127.0.0.1"
+                self.assertEqual(login("unknown", "incorrect-secret", "203.0.113.8, 2001:db8::1")[0], 401)
+                with self.assertLogs(level="WARNING") as warning:
+                    self.assertEqual(login("unknown", "incorrect-secret", "invalid")[0], 401)
+                self.assertIn("X-Forwarded-For", warning.output[0])
+
+                for _ in range(10):
+                    self.assertEqual(login("blocked", "incorrect-secret", "203.0.113.7")[0], 401)
+                self.assertEqual(login("blocked", "incorrect-secret", "203.0.113.7")[0], 429)
+
+                status, _, data = request(
+                    "GET", "/api/audit", headers={"Cookie": cookie.split(";", 1)[0]}
+                )
+                self.assertEqual(status, 200)
+                entries = json.loads(data)["entries"]
+                logins = [entry for entry in entries if entry["action"] == "login"]
+                self.assertEqual(len(logins), 16)
+                self.assertEqual((logins[-1]["actor"], logins[-1]["outcome"]), ("Okänd", "failed"))
+                self.assertIn("127.0.0.1", logins[-2]["detail"])
+                self.assertEqual((logins[-3]["actor"], logins[-3]["outcome"]), ("admin", "ok"))
+                self.assertIn("127.0.0.1", logins[-3]["detail"])
+                self.assertIn("2001:db8::1", logins[-4]["detail"])
+                self.assertIn("127.0.0.1", logins[-5]["detail"])
+                self.assertIn("Inloggning spärrad", logins[0]["detail"])
+                self.assertIn("203.0.113.7", logins[0]["detail"])
+                self.assertNotIn(password, json.dumps(entries))
+                self.assertNotIn("incorrect-secret", json.dumps(entries))
+            finally:
+                _login_failures.clear()
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
     def test_login_page_sessions_and_case_insensitive_users(self):
         import http.client
 

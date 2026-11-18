@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import hmac
 import http.client
+import ipaddress
 import json
 import logging
 import os
@@ -2121,6 +2122,16 @@ def admin_credentials() -> tuple[str, str]:
     return username, password
 
 
+def trusted_proxy_address() -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    value = os.environ.get("PORTAL_TRUSTED_PROXY", "").strip()
+    if not value:
+        return None
+    try:
+        return ipaddress.ip_address(value)
+    except ValueError as exc:
+        raise RuntimeError("PORTAL_TRUSTED_PROXY måste vara en giltig IP-adress.") from exc
+
+
 class PortalHandler(BaseHTTPRequestHandler):
     server_version = f"SvxLinkPortal/{PORTAL_VERSION}"
 
@@ -2176,6 +2187,24 @@ class PortalHandler(BaseHTTPRequestHandler):
             parts.append("Secure")
         return ("Set-Cookie", "; ".join(parts))
 
+    def login_client_ip(self) -> str:
+        peer = self.client_address[0]
+        if trusted_proxy_address() != ipaddress.ip_address(peer):
+            return peer
+        forwarded = self.headers.get_all("X-Forwarded-For", [])
+        try:
+            return str(ipaddress.ip_address(forwarded[-1].split(",")[-1].strip()))
+        except (IndexError, ValueError):
+            logging.warning("Betrodd proxy %s skickade ingen giltig X-Forwarded-For-adress.", peer)
+            return peer
+
+    def audit_login(self, actor: str, outcome: str, reason: str) -> None:
+        with database() as connection:
+            record_audit(
+                connection, actor, "login", f"IP-adress: {self.login_client_ip()}; {reason}",
+                outcome=outcome,
+            )
+
     def handle_login(self) -> None:
         try:
             payload = self.read_json_body(MAX_REQUEST_BYTES)
@@ -2187,11 +2216,14 @@ class PortalHandler(BaseHTTPRequestHandler):
             ):
                 raise ValueError("Ange användarnamn och lösenord.")
         except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+            self.audit_login("Okänd", "failed", "Ogiltig inloggningsbegäran")
             self.send_json(400, {"error": str(exc)})
             return
         username = payload["username"].strip()
+        audit_username = "".join(c if c.isprintable() else "?" for c in username[:100]) or "Okänd"
         key = (self.client_address[0], username.lower())
         if login_throttled(key):
+            self.audit_login(audit_username, "failed", "Inloggning spärrad")
             self.send_json(429, {"error": "För många inloggningsförsök. Försök igen om en stund."})
             return
         result = None
@@ -2199,10 +2231,12 @@ class PortalHandler(BaseHTTPRequestHandler):
             result = authenticate(username, payload["password"])
         if result is None:
             record_login_failure(key)
+            self.audit_login(audit_username, "failed", "Fel användarnamn eller lösenord")
             self.send_json(401, {"error": "Fel användarnamn eller lösenord."})
             return
         clear_login_failures(key)
         token = create_session(result[0])
+        self.audit_login(result[0], "ok", "Inloggning lyckades")
         self.send_json(
             200,
             {"username": result[0], "role": result[1]},
@@ -3096,6 +3130,7 @@ class PortalHandler(BaseHTTPRequestHandler):
 
 def serve() -> None:
     admin_credentials()
+    trusted_proxy_address()
     with database():
         pass
     host = os.environ.get("PORTAL_HOST", "127.0.0.1")
