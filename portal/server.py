@@ -156,6 +156,7 @@ STATIC_ASSETS = {
     "schedules.js": JS,
     "service-log.js": JS,
     "dtmf.js": JS,
+    "commands.js": JS,
     "audio.js": JS,
     "remote.js": JS,
     "admin.js": JS,

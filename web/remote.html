@@ -38,8 +38,23 @@
       <p id="audio-error" class="error" role="status" aria-live="polite"></p>
       <p id="audio-diag" class="muted" role="status" hidden></p>
     </section>
+    <form id="dtmf-form" class="dtmf-form">
+      <label for="dtmf-sequence">DTMF-sekvens</label>
+      <div class="dtmf-controls">
+        <input id="dtmf-sequence" name="sequence" type="text" maxlength="64"
+          pattern="[0-9A-D*#]{1,64}" autocomplete="off" required aria-describedby="dtmf-help">
+        <button id="dtmf-send" type="submit" disabled>Skicka</button>
+      </div>
+      <p id="dtmf-help" class="muted">Tillåtna tecken: 0–9, A–D, * och #.</p>
+      <p id="dtmf-status" class="editor-status" role="status" aria-live="polite"></p>
+    </form>
+    <div>
+      <strong>Snabbknappar</strong>
+      <div id="dtmf-presets" class="preset-buttons"><span class="muted">Laddar knappar…</span></div>
+    </div>
     <p id="error" class="error" role="status" aria-live="polite"></p>
   </div>
+  <script src="/assets/commands.js"></script>
   <script src="/assets/audio.js"></script>
   <script src="/assets/remote.js"></script>
 </body>

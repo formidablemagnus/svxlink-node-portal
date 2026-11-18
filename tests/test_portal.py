@@ -1419,6 +1419,20 @@ class PortalDtmfTests(unittest.TestCase):
                 ) as response:
                     detail_page = response.read().decode("utf-8")
                 self.assertIn("DTMF-styrning", detail_page)
+                self.assertLess(detail_page.index('/assets/commands.js'),
+                                detail_page.index('/assets/node.js'))
+                with urlopen(
+                    Request(f"{base_url}/nodes/{online_node['node_id']}/remote",
+                            headers=admin_headers),
+                    timeout=2,
+                ) as response:
+                    remote_page = response.read().decode("utf-8")
+                self.assertIn('id="dtmf-form"', remote_page)
+                self.assertIn('id="dtmf-presets"', remote_page)
+                self.assertLess(remote_page.index('/assets/commands.js'),
+                                remote_page.index('/assets/remote.js'))
+                commands_script = fetch_asset(base_url, admin_headers, "commands.js")
+                self.assertIn("/dtmf-commands", commands_script)
 
                 with urlopen(
                     Request(f"{base_url}/dtmf", headers=admin_headers),
