@@ -1,6 +1,7 @@
 'use strict';
 (() => {
   const WIRE_RATE = 16000;
+  const MIC_BASE_GAIN = 0.5;
   const MAX_BUFFERED_SECONDS = 0.6;
   const START_DELAY_SECONDS = 0.15;
   const panel = document.getElementById('audio-panel');
@@ -215,7 +216,7 @@
       const end = Math.min(input.length, Math.max(start + 1, Math.floor((i + 1) * ratio)));
       let sum = 0;
       for (let j = start; j < end; j += 1) sum += input[j];
-      const value = Math.max(-1, Math.min(1, (sum / (end - start)) * Number(micGain.value)));
+      const value = Math.max(-1, Math.min(1, (sum / (end - start)) * Number(micGain.value) * MIC_BASE_GAIN));
       output[i] = Math.round(value * 32767);
     }
     return output;

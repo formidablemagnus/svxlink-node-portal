@@ -1,0 +1,79 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Microphone audio test</title>
+<div id="audio-panel">
+  <button id="audio-connect"></button>
+  <button id="audio-ptt"></button>
+  <input id="audio-ptt-lock" type="checkbox">
+  <input id="audio-volume" value="0.8">
+  <input id="audio-mic-gain" value="0.4">
+  <span id="audio-settings-status"></span>
+  <span id="audio-state"></span>
+  <span id="audio-error"></span>
+  <span id="audio-diag"></span>
+</div>
+<pre id="result">Running</pre>
+<script>
+  const sent = [];
+  let processor;
+  const audioNode = () => ({connect() {}, disconnect() {}, gain: {value: 1}});
+  window.AudioContext = class {
+    constructor() { this.sampleRate = 16000; this.state = 'running'; this.destination = {}; }
+    createMediaStreamSource() { return audioNode(); }
+    createScriptProcessor() { processor = audioNode(); return processor; }
+    createGain() { return audioNode(); }
+    close() {}
+  };
+  Object.defineProperty(navigator, 'mediaDevices', {
+    configurable: true,
+    value: {getUserMedia: async () => ({getTracks: () => []})},
+  });
+  window.fetch = async (url, options) => {
+    if (url === '/api/audio-settings') {
+      return {ok: true, json: async () => ({settings: {volume: 0.8, mic_gain: 0.4}})};
+    }
+    sent.push(options.body);
+    return {ok: true};
+  };
+  document.getElementById('audio-ptt').setPointerCapture = () => {};
+</script>
+<script src="../web/audio.js"></script>
+<script>
+  (async () => {
+    const wait = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const result = document.getElementById('result');
+    try {
+      await wait();
+      if (document.getElementById('audio-mic-gain').value !== '0.4') {
+        throw new Error('Saved microphone gain was not loaded');
+      }
+      window.SvxAudio.update({talk: true}, true);
+      document.getElementById('audio-ptt').dispatchEvent(new Event('pointerdown'));
+      await wait();
+      for (const [setting, sample, positive, negative] of [
+        ['0.05', 0.5, 410, -410],
+        ['0.1', 0.5, 819, -819],
+        ['0.4', 0.5, 3277, -3277],
+        ['2', 0.5, 16384, -16383],
+        ['2', 1, 32767, -32767],
+      ]) {
+        document.getElementById('audio-mic-gain').value = setting;
+        const input = new Float32Array(1600);
+        for (let i = 0; i < input.length; i += 2) {
+          input[i] = sample;
+          input[i + 1] = -sample;
+        }
+        processor.onaudioprocess({inputBuffer: {getChannelData: () => input}});
+        await wait();
+        const body = sent.shift();
+        const pcm = new DataView(body.buffer, body.byteOffset + 1);
+        if (body[0] !== 1 || pcm.getInt16(0, true) !== positive || pcm.getInt16(2, true) !== negative) {
+          throw new Error(`Unexpected PCM at gain ${setting}`);
+        }
+      }
+      result.textContent = 'PASS';
+    } catch (error) {
+      result.textContent = `FAIL: ${error.message}`;
+    }
+  })();
+</script>

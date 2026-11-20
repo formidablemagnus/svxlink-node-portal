@@ -315,6 +315,8 @@ at 80% playback volume and 40% microphone gain. The previous browser-local
 microphone setting is not imported because it cannot be associated safely with
 an individual account. Audio settings are included in portal backups; restoring
 older backups resets them to the defaults.
+Microphone samples are attenuated by 50% before transmission at every slider
+setting, including previously saved settings.
 
 ```ini
 [Rx1]
